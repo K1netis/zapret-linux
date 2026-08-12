@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# zapret — единая точка входа для zapret-linux (аналог service.bat у Flowseal).
+# Устанавливается в /usr/local/bin/zapret и работает из любого каталога.
+#
+#   zapret                       краткая сводка (то же, что status)
+#   zapret status                полная диагностика
+#   zapret list                  список доступных стратегий
+#   zapret use <стратегия>       применить стратегию и перезапустить
+#   zapret start|stop|restart    управление службой
+#   zapret enable|disable        автозапуск при загрузке системы
+#   zapret game {off|tcp|udp|all|status}
+#   zapret ipset {none|loaded|any|status}
+#   zapret fakes {list|types|set <тип> <файл>|unset <тип>|status}
+#   zapret sync                  обновить стратегии из репозитория Flowseal
+#   zapret update                обновить сам zapret-linux
+#   zapret version               версия
+#   zapret log [N]               последние N строк журнала (по умолчанию 30)
+#   zapret uninstall             полное удаление
+set -uo pipefail
+
+OPT_DIR="${OPT_DIR:-/opt/zapret-linux}"
+ETC_DIR="${ETC_DIR:-/etc/zapret-linux}"
+SERVICE=zapret-linux
+
+die() { echo "zapret: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" = 0 ] || die "нужны права root — запустите через sudo"; }
+[ -d "$OPT_DIR" ] || die "не установлен: нет $OPT_DIR"
+
+current_strategy() {
+  [ -f "$ETC_DIR/active.env" ] || { echo general; return; }
+  # shellcheck disable=SC1091
+  . "$ETC_DIR/active.env"; echo "${STRATEGY_FILE:-${STRATEGY_NAME:-general}}"
+}
+
+brief() {
+  local state="НЕ работает"
+  systemctl is-active "$SERVICE" >/dev/null 2>&1 && state="работает"
+  echo "zapret-linux: $state"
+  if [ -f "$ETC_DIR/active.env" ]; then
+    # shellcheck disable=SC1091
+    . "$ETC_DIR/active.env"
+    echo "  стратегия:  ${STRATEGY_NAME:-?}  [${STRATEGY_FILE:-?}]"
+    echo "  gamefilter: ${GAMEFILTER_MODE:-?}    ipset: ${IPSET_MODE:-?}"
+  fi
+  echo "  подробности: zapret status | все команды: zapret help"
+}
+
+cmd="${1:-brief}"; shift 2>/dev/null || true
+
+case "$cmd" in
+  brief)   brief ;;
+  status)  need_root; exec "$OPT_DIR/status.sh" ;;
+  test)    need_root; exec "$OPT_DIR/selftest.sh" ;;
+  list)
+    echo "доступные стратегии (текущая: $(current_strategy)):"
+    ls -1 "$OPT_DIR"/strategies/*.conf 2>/dev/null | xargs -rn1 basename \
+      | sed 's/\.conf$//' | sed 's/^/  /'
+    ;;
+  use)
+    need_root
+    [ $# -ge 1 ] || die "укажите стратегию: zapret use <имя>  (см. zapret list)"
+    [ -f "$OPT_DIR/strategies/$1.conf" ] || die "нет такой стратегии: $1 (см. zapret list)"
+    exec "$OPT_DIR/apply-strategy.sh" "$1"
+    ;;
+  start|stop|restart)  need_root; exec systemctl "$cmd" "$SERVICE" ;;
+  enable|disable)      need_root; exec systemctl "$cmd" "$SERVICE" ;;
+  game|gamefilter)     need_root; exec "$OPT_DIR/gamefilter.sh" "${1:-status}" ;;
+  ipset|ipsetfilter)   need_root; exec "$OPT_DIR/ipsetfilter.sh" "${1:-status}" ;;
+  fakes)               need_root; exec "$OPT_DIR/fakes.sh" "$@" ;;
+  update)
+    need_root
+    [ -f "$OPT_DIR/update.sh" ] || die "нет $OPT_DIR/update.sh"
+    exec bash "$OPT_DIR/update.sh" "$@"
+    ;;
+  version|--version|-V)
+    echo "zapret-linux $(cat "$OPT_DIR/VERSION" 2>/dev/null || echo '?')"
+    ;;
+  sync)
+    need_root
+    [ -x "$OPT_DIR/sync-flowseal.sh" ] || die "нет $OPT_DIR/sync-flowseal.sh"
+    ( cd "$OPT_DIR" && bash sync-flowseal.sh ) || die "синхронизация не удалась"
+    echo "zapret: переприменяю текущую стратегию..."
+    exec "$OPT_DIR/apply-strategy.sh" "$(current_strategy)"
+    ;;
+  log)     exec journalctl -u "$SERVICE" -n "${1:-30}" --no-pager ;;
+  uninstall)
+    need_root
+    [ -x "$OPT_DIR/uninstall.sh" ] || die "нет $OPT_DIR/uninstall.sh"
+    exec "$OPT_DIR/uninstall.sh" "$@"
+    ;;
+  help|-h|--help)
+    cat <<'USAGE'
+zapret — управление zapret-linux (аналог service.bat у Flowseal)
+
+  zapret                       краткая сводка
+  zapret status                полная диагностика (счётчики nftables, журнал)
+  zapret test                  проверка: ловится ли трафик и работает ли обход
+  zapret list                  список доступных стратегий
+  zapret use <стратегия>       применить стратегию и перезапустить службу
+  zapret start|stop|restart    управление службой
+  zapret enable|disable        автозапуск при загрузке системы
+  zapret game {off|tcp|udp|all|status}      игровой фильтр
+  zapret ipset {none|loaded|any|status}     режим IPSet Filter
+  zapret fakes {list|types|set <тип> <файл>|unset <тип>|status}
+  zapret sync                  обновить стратегии из репозитория Flowseal
+  zapret update                обновить сам zapret-linux (--check | --force)
+  zapret version               версия
+  zapret log [N]               последние N строк журнала (по умолчанию 30)
+  zapret uninstall             полное удаление
+USAGE
+    ;;
+  *) die "неизвестная команда '$cmd' (см. zapret help)" ;;
+esac

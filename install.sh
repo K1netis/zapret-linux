@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# install.sh — установка zapret-linux на систему с systemd.
+#
+# Порядок действий:
+#   1. загрузка движка bol-van/zapret
+#   2. получение бинарника nfqws (готового или собранного из исходников)
+#   3. копирование нашей части в /opt/zapret-linux
+#   4. загрузка стратегий, списков и фейков от Flowseal
+#   5. установка службы systemd и команды zapret
+#   6. применение стратегии по умолчанию
+set -euo pipefail
+
+SRC="$(cd "$(dirname "$0")" && pwd)"
+OPT_DIR=/opt/zapret-linux
+ETC_DIR=/etc/zapret-linux
+ENGINE_DIR="$SRC/zapret"
+DEFAULT_STRATEGY="${DEFAULT_STRATEGY:-general}"
+
+say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
+die() { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
+
+[ "$(id -u)" = 0 ] || die "нужны права root: sudo bash install.sh"
+
+# Архивы и загрузки из браузера теряют признак исполняемости — восстанавливаем,
+# чтобы дальнейшая работа не зависела от способа получения файлов.
+chmod +x "$SRC"/*.sh "$SRC"/lib/*.sh "$SRC"/tools/*.sh 2>/dev/null || true
+command -v nft >/dev/null 2>&1 || warn "не найден nftables (nft) — установите его перед запуском службы."
+
+# 1) Движок ------------------------------------------------------------------
+if [ ! -e "$ENGINE_DIR/nfq/Makefile" ] && [ ! -x "$OPT_DIR/nfqws" ]; then
+  say "загружаю движок bol-van/zapret"
+  git clone --depth=1 https://github.com/bol-van/zapret "$ENGINE_DIR" \
+    || die "не удалось загрузить движок (нет сети или не установлен git)"
+fi
+
+# 2) Бинарник nfqws ----------------------------------------------------------
+NFQWS=""
+# уже установленный движок переиспользуем: не качаем исходники и не пересобираем
+if [ -z "${NFQWS:-}" ] && [ -x "$OPT_DIR/nfqws" ] && [ ! -x "$ENGINE_DIR/nfq/nfqws" ]; then
+  NFQWS="$OPT_DIR/nfqws"
+  say "используется уже собранный nfqws"
+fi
+if [ -z "$NFQWS" ] && [ -x "$ENGINE_DIR/nfq/nfqws" ]; then
+  NFQWS="$ENGINE_DIR/nfq/nfqws"
+else
+  arch="$(uname -m)"
+  for cand in "$ENGINE_DIR"/binaries/*"$arch"*/nfqws "$ENGINE_DIR"/binaries/*/nfqws; do
+    [ -x "$cand" ] && { NFQWS="$cand"; break; }
+  done
+fi
+if [ -z "$NFQWS" ]; then
+  say "собираю nfqws из исходников"
+  make -C "$ENGINE_DIR/nfq" nfqws \
+    || die "сборка nfqws не удалась. Установите зависимости: gcc make zlib1g-dev libnetfilter-queue-dev libnfnetlink-dev libmnl-dev"
+  NFQWS="$ENGINE_DIR/nfq/nfqws"
+fi
+[ -x "$NFQWS" ] || die "не удалось получить рабочий бинарник nfqws"
+
+# 2b) Загрузка стратегий, списков и фейков от Flowseal ------------------------
+SYNC="${SYNC:-auto}"   # auto | 1 | 0
+need_sync=0; ls "$SRC"/lists/*.txt >/dev/null 2>&1 || need_sync=1
+case "$SYNC" in 1) do_sync=1 ;; 0) do_sync=0 ;; *) do_sync=$need_sync ;; esac
+if [ "$do_sync" = 1 ]; then
+  if command -v curl >/dev/null 2>&1; then
+    say "загружаю стратегии, списки и фейки от Flowseal"
+    bash "$SRC/sync-flowseal.sh" || warn "загрузка от Flowseal не удалась — заполните lists/ и bin/ вручную."
+  else
+    warn "curl не найден — пропускаю загрузку от Flowseal."
+  fi
+fi
+
+# 3) Копирование файлов проекта ----------------------------------------------
+say "копирую файлы в $OPT_DIR"
+mkdir -p "$OPT_DIR"/{lib,tools,strategies,lists,bin}
+cp -a "$SRC"/lib/.        "$OPT_DIR/lib/"
+cp -a "$SRC"/tools/.      "$OPT_DIR/tools/"
+cp -a "$SRC"/strategies/. "$OPT_DIR/strategies/"
+cp -a "$SRC"/apply-strategy.sh "$SRC"/gamefilter.sh "$SRC"/ipsetfilter.sh \
+      "$SRC"/fakes.sh "$SRC"/status.sh "$SRC"/selftest.sh "$SRC"/sync-flowseal.sh \
+      "$SRC"/uninstall.sh "$SRC"/update.sh "$SRC"/zapret-cli "$OPT_DIR/"
+cp -a "$SRC"/VERSION "$OPT_DIR/" 2>/dev/null || true
+# repo.conf не трогаем: там настройки обновления, заданные пользователем
+[ -f "$OPT_DIR/repo.conf" ] || cp -a "$SRC"/repo.conf "$OPT_DIR/" 2>/dev/null || true
+# файл службы нужен при удалении и переустановке — держим рядом
+mkdir -p "$OPT_DIR/systemd" && cp -a "$SRC"/systemd/. "$OPT_DIR/systemd/"
+# списки и фейки копируем без перезаписи: не затираем то, что уже установлено
+cp -an "$SRC"/lists/. "$OPT_DIR/lists/" 2>/dev/null || true
+cp -an "$SRC"/bin/.   "$OPT_DIR/bin/"   2>/dev/null || true
+cp -a "$NFQWS" "$OPT_DIR/nfqws"
+chmod +x "$OPT_DIR"/*.sh "$OPT_DIR"/lib/*.sh "$OPT_DIR"/tools/*.sh \
+         "$OPT_DIR/zapret-cli" "$OPT_DIR/nfqws"
+
+# единая команда управления
+ln -sf "$OPT_DIR/zapret-cli" /usr/local/bin/zapret
+
+# 4) Фейки, входящие в состав bol-van/zapret ---------------------------------
+if [ -d "$ENGINE_DIR/files/fake" ]; then
+  cp -an "$ENGINE_DIR"/files/fake/*.bin "$OPT_DIR/bin/" 2>/dev/null || true
+fi
+
+# предупреждаем о фейках, на которые ссылаются стратегии, но которых нет
+missing=0
+for b in $(grep -rhoE '@BIN@/[a-zA-Z0-9_.-]+\.bin' "$OPT_DIR/strategies" | sed 's|@BIN@/||' | sort -u); do
+  [ -f "$OPT_DIR/bin/$b" ] || { warn "нет файла-фейка: bin/$b"; missing=1; }
+done
+[ "$missing" = 0 ] || warn "стратегии, ссылающиеся на отсутствующие фейки, работать не будут."
+
+# без списков nfqws не запустится так же, как без фейков
+if ! ls "$OPT_DIR"/lists/*.txt >/dev/null 2>&1; then
+  warn "lists/ пуст — nfqws не запустится. Выполните: bash $SRC/sync-flowseal.sh"
+  ASSETS_OK=0
+else
+  ASSETS_OK=1
+fi
+[ "$missing" = 0 ] || ASSETS_OK=0
+
+# 5) Служба systemd ----------------------------------------------------------
+say "устанавливаю службу systemd"
+install -m644 "$SRC/systemd/zapret-linux.service" /etc/systemd/system/zapret-linux.service
+systemctl daemon-reload
+
+# 6) Настройки по умолчанию --------------------------------------------------
+mkdir -p "$ETC_DIR"
+[ -f "$ETC_DIR/gamefilter" ] || echo off > "$ETC_DIR/gamefilter"
+[ -f "$ETC_DIR/ipsetfilter" ] || echo loaded > "$ETC_DIR/ipsetfilter"
+if [ "${ASSETS_OK:-1}" != 1 ]; then
+  warn "пропускаю запуск сервиса: сначала доставьте списки и фейки, затем:"
+  warn "  bash $SRC/sync-flowseal.sh && sudo $OPT_DIR/apply-strategy.sh $DEFAULT_STRATEGY"
+  exit 1
+fi
+say "применяю стратегию по умолчанию: $DEFAULT_STRATEGY"
+OPT_DIR="$OPT_DIR" ETC_DIR="$ETC_DIR" "$OPT_DIR/apply-strategy.sh" "$DEFAULT_STRATEGY" || \
+  warn "не удалось применить стратегию — проверьте наличие списков и фейков."
+
+systemctl enable zapret-linux >/dev/null 2>&1 || true
+cat <<EOF
+
+$(say "готово")  Управление одной командой:
+
+  zapret                 краткая сводка
+  zapret status          полная диагностика (счётчики nftables)
+  zapret test            проверка обхода на текущей стратегии
+  zapret list            список стратегий ($(ls -1 "$OPT_DIR"/strategies/*.conf 2>/dev/null | wc -l) шт.)
+  zapret use <имя>       переключить стратегию
+  zapret game all        игровой фильтр (off|tcp|udp|all)
+  zapret ipset loaded    режим IPSet (none|loaded|any)
+  zapret fakes list      подмена .bin-фейков
+  zapret sync            обновить стратегии Flowseal
+  zapret update          обновить сам zapret-linux
+  zapret log             журнал службы
+  zapret uninstall       полное удаление
+  zapret help            все команды
+
+  Установка самодостаточна: каталог с исходниками больше не нужен.
+EOF

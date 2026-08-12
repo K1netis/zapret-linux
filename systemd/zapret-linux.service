@@ -1,0 +1,21 @@
+[Unit]
+Description=zapret-linux — обход DPI на базе nfqws (стратегии Flowseal для Linux)
+Documentation=https://github.com/bol-van/zapret https://github.com/Flowseal/zapret-discord-youtube
+After=network-online.target nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/zapret-linux/active.env
+# Создаём правила nftables, запускаем nfqws, при остановке правила снимаем.
+ExecStartPre=/opt/zapret-linux/lib/fw.sh up
+ExecStart=/etc/zapret-linux/nfqws.cmd
+ExecStopPost=/opt/zapret-linux/lib/fw.sh down
+Restart=on-failure
+RestartSec=2
+# nfqws нужен доступ к NFQUEUE и возможность отправлять пакеты.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+
+[Install]
+WantedBy=multi-user.target
