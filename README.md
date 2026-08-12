@@ -70,7 +70,7 @@ zapret-cli             единая команда управления
 
 ## Требования
 
-- Linux с systemd (проверено на Arch, Ubuntu, Debian)
+- Linux с systemd (проверено на Arch, Ubuntu, Debian, Fedora)
 - `nftables`, `git`, `curl`
 - для сборки движка: `gcc`, `make`, `zlib`, `libnetfilter_queue`, `libnfnetlink`, `libmnl`
 
