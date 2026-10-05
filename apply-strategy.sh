@@ -22,7 +22,10 @@ STRAT_DIR="$OPT_DIR/strategies"
 NFQWS_BIN="${NFQWS_BIN:-$OPT_DIR/nfqws}"
 QNUM="${QNUM:-200}"
 FWMARK="${FWMARK:-0x40000000}"
-GAMEFILTER_PORTS="${GAMEFILTER_PORTS:-1024-65535}"
+# Порт-заглушка для выключенного игрового фильтра: firewall его не направляет
+# в очередь, поэтому профиль с ним не срабатывает никогда. Так же поступает
+# Flowseal в Windows-версии.
+GAMEFILTER_OFF_PORT="${GAMEFILTER_OFF_PORT:-1}"
 SERVICE="${SERVICE:-zapret-linux}"
 
 die() { echo "apply-strategy: $*" >&2; exit 1; }
@@ -47,12 +50,23 @@ GF_MODE="off"
 
 clean_ports() { sed -E 's/,+/,/g; s/^,//; s/,$//'; }
 
+# Порты игрового фильтра настраиваются (Flowseal 1.10.3), по умолчанию 1024-65535.
+GF_TCP_PORTS="1024-65535"; GF_UDP_PORTS="1024-65535"
+if [ -f "$ETC_DIR/gamefilter-ports" ]; then
+  v="$(sed -n 's/^TCP=//p' "$ETC_DIR/gamefilter-ports" | head -n1)"; [ -n "$v" ] && GF_TCP_PORTS="$v"
+  v="$(sed -n 's/^UDP=//p' "$ETC_DIR/gamefilter-ports" | head -n1)"; [ -n "$v" ] && GF_UDP_PORTS="$v"
+fi
+
+# gf_* — порты для firewall (пусто = не направлять в очередь),
+# opt_* — значение для профиля nfqws (заглушка, если фильтр выключен).
 case "$GF_MODE" in
-  tcp)  gf_tcp="$GAMEFILTER_PORTS"; gf_udp="" ;;
-  udp)  gf_tcp="";                  gf_udp="$GAMEFILTER_PORTS" ;;
-  all)  gf_tcp="$GAMEFILTER_PORTS"; gf_udp="$GAMEFILTER_PORTS" ;;
-  *)    gf_tcp="";                  gf_udp="" ;;
+  tcp)  gf_tcp="$GF_TCP_PORTS"; gf_udp="" ;;
+  udp)  gf_tcp="";              gf_udp="$GF_UDP_PORTS" ;;
+  all)  gf_tcp="$GF_TCP_PORTS"; gf_udp="$GF_UDP_PORTS" ;;
+  *)    gf_tcp="";              gf_udp="" ;;
 esac
+opt_tcp="${gf_tcp:-$GAMEFILTER_OFF_PORT}"
+opt_udp="${gf_udp:-$GAMEFILTER_OFF_PORT}"
 
 ports_tcp="$(printf '%s' "$PORTS_TCP" | sed "s|@GAMEFILTER_TCP@|$gf_tcp|g" | clean_ports)"
 ports_udp="$(printf '%s' "$PORTS_UDP" | sed "s|@GAMEFILTER_UDP@|$gf_udp|g" | clean_ports)"
@@ -80,10 +94,8 @@ case "$IPSET_MODE" in
     fi ;;
 esac
 
-# В строке параметров nfqws игровые порты подставляются всегда: дойдёт ли до
-# этих профилей трафик, решают правила firewall выше.
 opt="$(printf '%s' "$NFQWS_OPT" \
-  | sed "s|@GAMEFILTER_TCP@|$GAMEFILTER_PORTS|g; s|@GAMEFILTER_UDP@|$GAMEFILTER_PORTS|g" \
+  | sed "s|@GAMEFILTER_TCP@|$opt_tcp|g; s|@GAMEFILTER_UDP@|$opt_udp|g" \
   | sed "s|@IPSET@|$IPSET_ACTIVE|g" \
   | sed "s|@BIN@|$BIN_DIR|g; s|@LISTS@|$LISTS_DIR|g")"
 
@@ -137,6 +149,8 @@ cat > "$ETC_DIR/active.env" <<EOF
 STRATEGY_NAME="$STRATEGY_NAME"
 STRATEGY_FILE="$STRAT"
 GAMEFILTER_MODE="$GF_MODE"
+GAMEFILTER_TCP_PORTS="$GF_TCP_PORTS"
+GAMEFILTER_UDP_PORTS="$GF_UDP_PORTS"
 IPSET_MODE="$IPSET_MODE"
 IPSET_ACTIVE="$IPSET_ACTIVE"
 PORTS_TCP="$ports_tcp"

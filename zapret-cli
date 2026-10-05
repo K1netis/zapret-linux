@@ -9,6 +9,7 @@
 #   zapret start|stop|restart    управление службой
 #   zapret enable|disable        автозапуск при загрузке системы
 #   zapret game {off|tcp|udp|all|status}
+#   zapret game ports [tcp|udp <список> | reset]
 #   zapret ipset {none|loaded|any|status}
 #   zapret fakes {list|types|set <тип> <файл>|unset <тип>|status}
 #   zapret sync                  обновить стратегии из репозитория Flowseal
@@ -64,7 +65,11 @@ case "$cmd" in
     ;;
   start|stop|restart)  need_root; exec systemctl "$cmd" "$SERVICE" ;;
   enable|disable)      need_root; exec systemctl "$cmd" "$SERVICE" ;;
-  game|gamefilter)     need_root; exec "$OPT_DIR/gamefilter.sh" "${1:-status}" ;;
+  game|gamefilter)
+    need_root
+    [ $# -eq 0 ] && set -- status
+    exec "$OPT_DIR/gamefilter.sh" "$@"
+    ;;
   ipset|ipsetfilter)   need_root; exec "$OPT_DIR/ipsetfilter.sh" "${1:-status}" ;;
   fakes)               need_root; exec "$OPT_DIR/fakes.sh" "$@" ;;
   update)
@@ -100,6 +105,7 @@ zapret — управление zapret-linux (аналог service.bat у Flowse
   zapret start|stop|restart    управление службой
   zapret enable|disable        автозапуск при загрузке системы
   zapret game {off|tcp|udp|all|status}      игровой фильтр
+  zapret game ports tcp 1024-1934,1936-65535 свои порты игрового фильтра
   zapret ipset {none|loaded|any|status}     режим IPSet Filter
   zapret fakes {list|types|set <тип> <файл>|unset <тип>|status}
   zapret sync                  обновить стратегии из репозитория Flowseal

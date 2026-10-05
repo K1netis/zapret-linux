@@ -26,7 +26,7 @@ if [ -f "$ETC_DIR/active.env" ]; then
   # shellcheck disable=SC1091
   . "$ETC_DIR/active.env"
   echo "  стратегия:   ${STRATEGY_NAME:-?}"
-  echo "  gamefilter:  ${GAMEFILTER_MODE:-?}"
+  echo "  gamefilter:  ${GAMEFILTER_MODE:-?}  (TCP ${GAMEFILTER_TCP_PORTS:-1024-65535}, UDP ${GAMEFILTER_UDP_PORTS:-1024-65535})"
   echo "  ipset:       ${IPSET_MODE:-?}"
   echo "  TCP порты:   ${PORTS_TCP:-}"
   echo "  UDP порты:   ${PORTS_UDP:-}"

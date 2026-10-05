@@ -70,7 +70,7 @@ zapret-cli             единая команда управления
 
 ## Требования
 
-- Linux с systemd (проверено на Arch, Ubuntu, Debian, Fedora)
+- Linux с systemd (проверено на Arch, Ubuntu, Debian)
 - `nftables`, `git`, `curl`
 - для сборки движка: `gcc`, `make`, `zlib`, `libnetfilter_queue`, `libnfnetlink`, `libmnl`
 
@@ -117,6 +117,7 @@ sudo bash install.sh
 | `zapret list` | список доступных стратегий |
 | `sudo zapret use <имя>` | переключиться на другую стратегию |
 | `sudo zapret game udp` | игровой фильтр: `off`, `tcp`, `udp`, `all` |
+| `sudo zapret game ports` | порты игрового фильтра |
 | `sudo zapret ipset loaded` | режим IPSet: `none`, `loaded`, `any` |
 | `sudo zapret fakes list` | подмена фейков, используемых стратегией |
 | `sudo zapret sync` | обновить стратегии от Flowseal |
@@ -165,6 +166,18 @@ sudo zapret game off    # выключить
 Начинайте с `udp`: режим `all` захватывает заметно больше трафика и может
 замедлить работу.
 
+Диапазон портов можно изменить. Например, чтобы не трогать стриминг по RTMP
+(порт 1935):
+
+```sh
+sudo zapret game ports tcp 1024-1934,1936-65535
+sudo zapret game ports udp 1024-65535
+sudo zapret game ports           # показать текущие
+sudo zapret game ports reset     # вернуть 1024-65535
+```
+
+Порты задаются числами и диапазонами через запятую, без пробелов.
+
 ### Режим IPSet
 
 Управляет тем, какие адреса попадают под профили, привязанные к списку IP:
@@ -187,7 +200,8 @@ sudo zapret update    # сам zapret-linux
 Скрипт перечисляет содержимое репозитория Flowseal через GitHub API, поэтому
 новые стратегии подхватываются автоматически, без правок кода.
 
-`zapret update` обновляет сам проект: скрипты, службу, транслятор. Текущая
+`zapret update` обновляет сам проект: скрипты, службу, транслятор. Что
+изменилось в каждой версии — в [CHANGELOG.md](CHANGELOG.md). Текущая
 стратегия, режимы фильтров и ваши списки сохраняются, уже собранный движок
 используется повторно, так что переустановка не требуется.
 
