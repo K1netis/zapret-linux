@@ -99,5 +99,6 @@ if SYNC=0 DEFAULT_STRATEGY="$strategy" bash "$src/install.sh"; then
   echo "  Настройки сохранены: стратегия=$strategy, gamefilter=$gf, ipset=$ips"
   echo "  Стратегии Flowseal обновляются отдельно: sudo zapret sync"
 else
-  die "установка не удалась, прежняя версия осталась работать"
+  die "установка прервана. Служба продолжает работать как раньше, а номер версии
+    не обновлён — повторите: sudo zapret update"
 fi

@@ -4,10 +4,10 @@
 # Порядок действий:
 #   1. загрузка движка bol-van/zapret
 #   2. получение бинарника nfqws (готового или собранного из исходников)
-#   3. копирование нашей части в /opt/zapret-linux
-#   4. загрузка стратегий, списков и фейков от Flowseal
-#   5. установка службы systemd и команды zapret
-#   6. применение стратегии по умолчанию
+#   3. загрузка стратегий, списков и фейков от Flowseal
+#   4. копирование файлов в /opt/zapret-linux (nfqws — первым)
+#   5. установка службы systemd, запись номера версии
+#   6. применение стратегии (сохранённой или general при первой установке)
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")" && pwd)"
@@ -63,7 +63,7 @@ if [ -z "$NFQWS" ]; then
 fi
 [ -x "$NFQWS" ] || die "не удалось получить рабочий бинарник nfqws"
 
-# 2b) Загрузка стратегий, списков и фейков от Flowseal ------------------------
+# 3) Загрузка стратегий, списков и фейков от Flowseal -------------------------
 SYNC="${SYNC:-auto}"   # auto | 1 | 0
 need_sync=0; ls "$SRC"/lists/*.txt >/dev/null 2>&1 || need_sync=1
 case "$SYNC" in 1) do_sync=1 ;; 0) do_sync=0 ;; *) do_sync=$need_sync ;; esac
@@ -76,16 +76,28 @@ if [ "$do_sync" = 1 ]; then
   fi
 fi
 
-# 3) Копирование файлов проекта ----------------------------------------------
+# 4) Копирование файлов проекта ----------------------------------------------
 say "копирую файлы в $OPT_DIR"
 mkdir -p "$OPT_DIR"/{lib,tools,strategies,lists,bin}
+
+# Бинарник ставим первым: только этот шаг может сорваться из-за работающей
+# службы, и при сбое остальные файлы ещё не тронуты. Поверх запущенного файла
+# писать нельзя («Текстовый файл занят»), поэтому кладём новую копию рядом и
+# переименовываем: процесс дорабатывает со старой, после перезапуска — новая.
+if [ -f "$OPT_DIR/nfqws" ] && cmp -s "$NFQWS" "$OPT_DIR/nfqws"; then
+  :   # бинарник не изменился
+else
+  cp -f "$NFQWS" "$OPT_DIR/nfqws.new" \
+    && chmod +x "$OPT_DIR/nfqws.new" \
+    && mv -f "$OPT_DIR/nfqws.new" "$OPT_DIR/nfqws" \
+    || die "не удалось установить nfqws"
+fi
 cp -a "$SRC"/lib/.        "$OPT_DIR/lib/"
 cp -a "$SRC"/tools/.      "$OPT_DIR/tools/"
 cp -a "$SRC"/strategies/. "$OPT_DIR/strategies/"
 cp -a "$SRC"/apply-strategy.sh "$SRC"/gamefilter.sh "$SRC"/ipsetfilter.sh \
       "$SRC"/fakes.sh "$SRC"/status.sh "$SRC"/selftest.sh "$SRC"/sync-flowseal.sh \
       "$SRC"/uninstall.sh "$SRC"/update.sh "$SRC"/zapret-cli "$OPT_DIR/"
-cp -a "$SRC"/VERSION "$OPT_DIR/" 2>/dev/null || true
 # repo.conf не трогаем: там настройки обновления, заданные пользователем
 [ -f "$OPT_DIR/repo.conf" ] || cp -a "$SRC"/repo.conf "$OPT_DIR/" 2>/dev/null || true
 # файл службы нужен при удалении и переустановке — держим рядом
@@ -93,17 +105,10 @@ mkdir -p "$OPT_DIR/systemd" && cp -a "$SRC"/systemd/. "$OPT_DIR/systemd/"
 # списки и фейки копируем без перезаписи: не затираем то, что уже установлено
 cp -an "$SRC"/lists/. "$OPT_DIR/lists/" 2>/dev/null || true
 cp -an "$SRC"/bin/.   "$OPT_DIR/bin/"   2>/dev/null || true
-cp -a "$NFQWS" "$OPT_DIR/nfqws"
-chmod +x "$OPT_DIR"/*.sh "$OPT_DIR"/lib/*.sh "$OPT_DIR"/tools/*.sh \
-         "$OPT_DIR/zapret-cli" "$OPT_DIR/nfqws"
+chmod +x "$OPT_DIR"/*.sh "$OPT_DIR"/lib/*.sh "$OPT_DIR"/tools/*.sh "$OPT_DIR/zapret-cli"
 
 # единая команда управления
 ln -sf "$OPT_DIR/zapret-cli" /usr/local/bin/zapret
-
-# 4) Фейки, входящие в состав bol-van/zapret ---------------------------------
-if [ -d "$ENGINE_DIR/files/fake" ]; then
-  cp -an "$ENGINE_DIR"/files/fake/*.bin "$OPT_DIR/bin/" 2>/dev/null || true
-fi
 
 # предупреждаем о фейках, на которые ссылаются стратегии, но которых нет
 missing=0
@@ -126,7 +131,11 @@ say "устанавливаю службу systemd"
 install -m644 "$SRC/systemd/zapret-linux.service" /etc/systemd/system/zapret-linux.service
 systemctl daemon-reload
 
-# 6) Настройки по умолчанию --------------------------------------------------
+# Номер версии записываем последним, когда все файлы уже на месте. Если установка
+# сорвётся раньше, останется прежний номер, и zapret update повторит попытку.
+cp -f "$SRC/VERSION" "$OPT_DIR/VERSION"
+
+# 6) Применение стратегии ----------------------------------------------------
 mkdir -p "$ETC_DIR"
 [ -f "$ETC_DIR/gamefilter" ] || echo off > "$ETC_DIR/gamefilter"
 [ -f "$ETC_DIR/ipsetfilter" ] || echo loaded > "$ETC_DIR/ipsetfilter"
