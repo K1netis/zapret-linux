@@ -14,6 +14,12 @@ SRC="$(cd "$(dirname "$0")" && pwd)"
 OPT_DIR=/opt/zapret-linux
 ETC_DIR=/etc/zapret-linux
 ENGINE_DIR="$SRC/zapret"
+# Повторная установка поверх существующей (вручную или через zapret update):
+# сохраняем выбранную пользователем стратегию, а не сбрасываем её на general.
+PREV_VERSION="$(cat "$OPT_DIR/VERSION" 2>/dev/null || true)"
+if [ -z "${DEFAULT_STRATEGY:-}" ] && [ -f "$ETC_DIR/active.env" ]; then
+  DEFAULT_STRATEGY="$( . "$ETC_DIR/active.env" 2>/dev/null; echo "${STRATEGY_FILE:-}" )"
+fi
 DEFAULT_STRATEGY="${DEFAULT_STRATEGY:-general}"
 
 say() { printf '\033[1;32m==>\033[0m %s\n' "$*"; }
@@ -129,11 +135,22 @@ if [ "${ASSETS_OK:-1}" != 1 ]; then
   warn "  bash $SRC/sync-flowseal.sh && sudo $OPT_DIR/apply-strategy.sh $DEFAULT_STRATEGY"
   exit 1
 fi
-say "применяю стратегию по умолчанию: $DEFAULT_STRATEGY"
+say "применяю стратегию: $DEFAULT_STRATEGY"
 OPT_DIR="$OPT_DIR" ETC_DIR="$ETC_DIR" "$OPT_DIR/apply-strategy.sh" "$DEFAULT_STRATEGY" || \
   warn "не удалось применить стратегию — проверьте наличие списков и фейков."
 
 systemctl enable zapret-linux >/dev/null 2>&1 || true
+NEW_VERSION="$(cat "$OPT_DIR/VERSION" 2>/dev/null || echo '?')"
+if [ -n "$PREV_VERSION" ]; then
+  if [ "$PREV_VERSION" = "$NEW_VERSION" ]; then
+    say "готово: zapret-linux $NEW_VERSION переустановлен"
+  else
+    say "готово: zapret-linux $PREV_VERSION -> $NEW_VERSION"
+  fi
+  echo "  Справка по командам: zapret help"
+  exit 0
+fi
+
 cat <<EOF
 
 $(say "готово")  Управление одной командой:

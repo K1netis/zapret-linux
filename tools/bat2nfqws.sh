@@ -20,9 +20,9 @@ set -euo pipefail
 
 die() { echo "bat2nfqws: $*" >&2; exit 1; }
 
-[ $# -ge 1 ] || die "usage: bat2nfqws.sh <strategy.bat>"
+[ $# -ge 1 ] || die "использование: bat2nfqws.sh <стратегия.bat>"
 SRC="$1"
-[ -f "$SRC" ] || die "no such file: $SRC"
+[ -f "$SRC" ] || die "файл не найден: $SRC"
 
 name="$(basename "$SRC")"; name="${name%.bat}"
 
@@ -33,7 +33,7 @@ joined="$(
 )"
 
 cmd="$(printf '%s\n' "$joined" | grep -i 'winws\.exe' || true)"
-[ -n "$cmd" ] || die "no winws.exe invocation found in $SRC"
+[ -n "$cmd" ] || die "в $SRC не найден запуск winws.exe"
 
 # Оставляем только то, что идёт после самой winws.exe.
 cmd="${cmd#*winws.exe\"}"
@@ -73,9 +73,9 @@ cmd="$(printf '%s\n' "$cmd" | tr -s ' ' | sed -E 's/^ +//; s/ +$//')"
 unknown="$(printf '%s\n%s\n%s\n' "$cmd" "$PORTS_TCP" "$PORTS_UDP" \
   | grep -oE '%[A-Za-z_][A-Za-z0-9_]*%' | sort -u || true)"
 if [ -n "$unknown" ]; then
-  echo "bat2nfqws: ERROR: untranslated macro(s) in $name.bat:" >&2
+  echo "bat2nfqws: ОШИБКА — незнакомые макросы в $name.bat:" >&2
   printf '  %s\n' $unknown >&2
-  echo "  -> teach the translator about them before using this strategy." >&2
+  echo "  -> транслятор нужно доработать, прежде чем использовать эту стратегию." >&2
   exit 3
 fi
 

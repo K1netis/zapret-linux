@@ -5,6 +5,7 @@
 strategies/*.conf
 lists/*.txt
 bin/*.bin
+flowseal-src/
 
 # локальные артефакты
 *.log
