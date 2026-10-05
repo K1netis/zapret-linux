@@ -78,30 +78,42 @@ fi
 
 # 4) Копирование файлов проекта ----------------------------------------------
 say "копирую файлы в $OPT_DIR"
-mkdir -p "$OPT_DIR"/{lib,tools,strategies,lists,bin}
+mkdir -p "$OPT_DIR"/{lib,tools,strategies,lists,bin,systemd}
 
-# Бинарник ставим первым: только этот шаг может сорваться из-за работающей
-# службы, и при сбое остальные файлы ещё не тронуты. Поверх запущенного файла
-# писать нельзя («Текстовый файл занят»), поэтому кладём новую копию рядом и
-# переименовываем: процесс дорабатывает со старой, после перезапуска — новая.
-if [ -f "$OPT_DIR/nfqws" ] && cmp -s "$NFQWS" "$OPT_DIR/nfqws"; then
-  :   # бинарник не изменился
-else
-  cp -f "$NFQWS" "$OPT_DIR/nfqws.new" \
-    && chmod +x "$OPT_DIR/nfqws.new" \
-    && mv -f "$OPT_DIR/nfqws.new" "$OPT_DIR/nfqws" \
-    || die "не удалось установить nfqws"
-fi
-cp -a "$SRC"/lib/.        "$OPT_DIR/lib/"
-cp -a "$SRC"/tools/.      "$OPT_DIR/tools/"
-cp -a "$SRC"/strategies/. "$OPT_DIR/strategies/"
-cp -a "$SRC"/apply-strategy.sh "$SRC"/gamefilter.sh "$SRC"/ipsetfilter.sh \
-      "$SRC"/fakes.sh "$SRC"/status.sh "$SRC"/selftest.sh "$SRC"/sync-flowseal.sh \
-      "$SRC"/uninstall.sh "$SRC"/update.sh "$SRC"/zapret-cli "$OPT_DIR/"
-# repo.conf не трогаем: там настройки обновления, заданные пользователем
-[ -f "$OPT_DIR/repo.conf" ] || cp -a "$SRC"/repo.conf "$OPT_DIR/" 2>/dev/null || true
+# Все файлы заменяем через новую копию рядом и переименование. Перезапись на
+# месте ломает тех, кто файл сейчас использует: поверх работающего nfqws писать
+# нельзя («Текстовый файл занят»), а bash, исполняющий update.sh, читает скрипт
+# по ходу работы и после подмены содержимого продолжил бы читать из середины
+# нового файла. При переименовании они дорабатывают со старой копией.
+put() { # источник назначение
+  if [ -f "$2" ] && cmp -s "$1" "$2"; then
+    return 0                                   # не изменился — не трогаем
+  fi
+  cp -a "$1" "$2.new.$$" && mv -f "$2.new.$$" "$2"
+}
+put_dir() { # каталог-источник каталог-назначение (файлы верхнего уровня)
+  local f
+  for f in "$1"/* "$1"/.[!.]*; do
+    [ -f "$f" ] || continue
+    put "$f" "$2/$(basename "$f")" || return 1
+  done
+}
+
+# Бинарник — первым: если что-то пойдёт не так, остальные файлы ещё не тронуты.
+put "$NFQWS" "$OPT_DIR/nfqws" || die "не удалось установить nfqws"
+chmod +x "$OPT_DIR/nfqws"
+
+for f in apply-strategy.sh gamefilter.sh ipsetfilter.sh fakes.sh status.sh \
+         selftest.sh sync-flowseal.sh uninstall.sh update.sh zapret-cli; do
+  put "$SRC/$f" "$OPT_DIR/$f" || die "не удалось установить $f"
+done
+put_dir "$SRC/lib"        "$OPT_DIR/lib"        || die "не удалось установить lib/"
+put_dir "$SRC/tools"      "$OPT_DIR/tools"      || die "не удалось установить tools/"
+put_dir "$SRC/strategies" "$OPT_DIR/strategies" || die "не удалось установить strategies/"
 # файл службы нужен при удалении и переустановке — держим рядом
-mkdir -p "$OPT_DIR/systemd" && cp -a "$SRC"/systemd/. "$OPT_DIR/systemd/"
+put_dir "$SRC/systemd"    "$OPT_DIR/systemd"    || die "не удалось установить systemd/"
+# repo.conf не трогаем: там настройки обновления, заданные пользователем
+[ -f "$OPT_DIR/repo.conf" ] || put "$SRC/repo.conf" "$OPT_DIR/repo.conf" || true
 # списки и фейки копируем без перезаписи: не затираем то, что уже установлено
 cp -an "$SRC"/lists/. "$OPT_DIR/lists/" 2>/dev/null || true
 cp -an "$SRC"/bin/.   "$OPT_DIR/bin/"   2>/dev/null || true
@@ -133,7 +145,7 @@ systemctl daemon-reload
 
 # Номер версии записываем последним, когда все файлы уже на месте. Если установка
 # сорвётся раньше, останется прежний номер, и zapret update повторит попытку.
-cp -f "$SRC/VERSION" "$OPT_DIR/VERSION"
+put "$SRC/VERSION" "$OPT_DIR/VERSION"
 
 # 6) Применение стратегии ----------------------------------------------------
 mkdir -p "$ETC_DIR"

@@ -8,6 +8,16 @@
 #   zapret update --force    переустановить даже если версия та же
 set -uo pipefail
 
+# Установщик заменит и этот файл. bash читает скрипт по ходу выполнения, поэтому
+# работаем из временной копии: что бы ни случилось с оригиналом, исполняется
+# ровно тот текст, который был в момент запуска.
+if [ -z "${ZAPRET_UPDATE_SELF:-}" ]; then
+  self_copy="$(mktemp)" || { echo "update: не удалось создать временный файл" >&2; exit 1; }
+  cp "$0" "$self_copy" || { echo "update: не удалось скопировать $0" >&2; exit 1; }
+  ZAPRET_UPDATE_SELF="$self_copy" exec bash "$self_copy" "$@"
+fi
+trap 'rm -f "$ZAPRET_UPDATE_SELF"' EXIT
+
 OPT_DIR="${OPT_DIR:-/opt/zapret-linux}"
 ETC_DIR="${ETC_DIR:-/etc/zapret-linux}"
 
@@ -66,7 +76,7 @@ fi
 [ -f "$ETC_DIR/ipsetfilter" ] && ips="$(cat "$ETC_DIR/ipsetfilter")"
 say "текущее состояние: стратегия=$strategy, gamefilter=$gf, ipset=$ips"
 
-tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp" "$ZAPRET_UPDATE_SELF"' EXIT
 say "скачиваю $remote_ver"
 curl -fsSL --max-time 120 \
   "https://codeload.github.com/$UPDATE_REPO/tar.gz/refs/heads/$UPDATE_BRANCH" \
