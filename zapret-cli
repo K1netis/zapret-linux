@@ -4,6 +4,7 @@
 #
 #   zapret                       краткая сводка (то же, что status)
 #   zapret status                полная диагностика
+#   zapret test [стратегия ...]  проверка всех стратегий сразу и рейтинг (или только указанных)
 #   zapret list                  список доступных стратегий
 #   zapret use <стратегия>       применить стратегию и перезапустить
 #   zapret start|stop|restart    управление службой
@@ -51,7 +52,7 @@ cmd="${1:-brief}"; shift 2>/dev/null || true
 case "$cmd" in
   brief)   brief ;;
   status)  need_root; exec "$OPT_DIR/status.sh" ;;
-  test)    need_root; exec "$OPT_DIR/selftest.sh" ;;
+  test)    need_root; exec "$OPT_DIR/selftest.sh" "$@" ;;
   list)
     echo "доступные стратегии (текущая: $(current_strategy)):"
     ls -1 "$OPT_DIR"/strategies/*.conf 2>/dev/null | xargs -rn1 basename \
@@ -60,6 +61,9 @@ case "$cmd" in
   use)
     need_root
     [ $# -ge 1 ] || die "укажите стратегию: zapret use <имя>  (см. zapret list)"
+    case "$1" in
+      *[!A-Za-z0-9._-]*) die "недопустимое имя стратегии '$1' (разрешены латиница, цифры, . _ -)" ;;
+    esac
     [ -f "$OPT_DIR/strategies/$1.conf" ] || die "нет такой стратегии: $1 (см. zapret list)"
     exec "$OPT_DIR/apply-strategy.sh" "$1"
     ;;
@@ -99,7 +103,7 @@ zapret — управление zapret-linux (аналог service.bat у Flowse
 
   zapret                       краткая сводка
   zapret status                полная диагностика (счётчики nftables, журнал)
-  zapret test                  проверка: ловится ли трафик и работает ли обход
+  zapret test [стратегия ...]  проверка всех стратегий сразу и рейтинг (или только указанных)
   zapret list                  список доступных стратегий
   zapret use <стратегия>       применить стратегию и перезапустить службу
   zapret start|stop|restart    управление службой

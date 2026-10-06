@@ -42,17 +42,30 @@ fi
 
 # 2) Бинарник nfqws ----------------------------------------------------------
 NFQWS=""
-# уже установленный движок переиспользуем: не качаем исходники и не пересобираем
-if [ -z "${NFQWS:-}" ] && [ -x "$OPT_DIR/nfqws" ] && [ ! -x "$ENGINE_DIR/nfq/nfqws" ]; then
-  NFQWS="$OPT_DIR/nfqws"
-  say "используется уже собранный nfqws"
-fi
-if [ -z "$NFQWS" ] && [ -x "$ENGINE_DIR/nfq/nfqws" ]; then
+# Порядок: собранный движок > уже установленный > готовый бинарник своей
+# архитектуры из binaries/ > сборка из исходников. Бинарник чужой архитектуры
+# не берём никогда: он установился бы и не запустился.
+if [ -x "$ENGINE_DIR/nfq/nfqws" ]; then
   NFQWS="$ENGINE_DIR/nfq/nfqws"
+  say "используется собранный движок: nfq/nfqws"
+elif [ -x "$OPT_DIR/nfqws" ]; then
+  NFQWS="$OPT_DIR/nfqws"
+  say "используется уже установленный nfqws"
 else
-  arch="$(uname -m)"
-  for cand in "$ENGINE_DIR"/binaries/*"$arch"*/nfqws "$ENGINE_DIR"/binaries/*/nfqws; do
-    [ -x "$cand" ] && { NFQWS="$cand"; break; }
+  case "$(uname -m)" in
+    x86_64)              archs="x86_64" ;;
+    aarch64|arm64)       archs="arm64 aarch64" ;;
+    armv7*|armv6*|arm*)  archs="arm" ;;
+    i386|i486|i586|i686) archs="x86" ;;
+    *)                   archs="" ;;
+  esac
+  for a in $archs; do
+    cand="$ENGINE_DIR/binaries/linux-$a/nfqws"
+    if [ -x "$cand" ]; then
+      NFQWS="$cand"
+      say "используется готовый бинарник nfqws для архитектуры $a"
+      break
+    fi
   done
 fi
 if [ -z "$NFQWS" ]; then
@@ -107,6 +120,7 @@ for f in apply-strategy.sh gamefilter.sh ipsetfilter.sh fakes.sh status.sh \
          selftest.sh sync-flowseal.sh uninstall.sh update.sh zapret-cli; do
   put "$SRC/$f" "$OPT_DIR/$f" || die "не удалось установить $f"
 done
+put "$SRC/targets.txt" "$OPT_DIR/targets.txt" || die "не удалось установить targets.txt"
 put_dir "$SRC/lib"        "$OPT_DIR/lib"        || die "не удалось установить lib/"
 put_dir "$SRC/tools"      "$OPT_DIR/tools"      || die "не удалось установить tools/"
 put_dir "$SRC/strategies" "$OPT_DIR/strategies" || die "не удалось установить strategies/"
@@ -150,8 +164,14 @@ put "$SRC/VERSION" "$OPT_DIR/VERSION"
 # 6) Применение стратегии ----------------------------------------------------
 mkdir -p "$ETC_DIR"
 [ -f "$ETC_DIR/gamefilter" ] || echo off > "$ETC_DIR/gamefilter"
-[ -f "$ETC_DIR/ipsetfilter" ] || echo loaded > "$ETC_DIR/ipsetfilter"
+[ -f "$ETC_DIR/ipsetfilter" ] || echo none > "$ETC_DIR/ipsetfilter"
 if [ "${ASSETS_OK:-1}" != 1 ]; then
+  if [ -n "$PREV_VERSION" ]; then
+    # переустановка: файлы уже обновлены и VERSION записан — это не сбой
+    warn "файлы обновлены, но стратегия не применена и служба не перезапущена: не хватает списков или фейков."
+    warn "Выполните: sudo zapret sync"
+    exit 0
+  fi
   warn "пропускаю запуск сервиса: сначала доставьте списки и фейки, затем:"
   warn "  bash $SRC/sync-flowseal.sh && sudo $OPT_DIR/apply-strategy.sh $DEFAULT_STRATEGY"
   exit 1

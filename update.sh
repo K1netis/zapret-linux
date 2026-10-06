@@ -67,7 +67,7 @@ if [ "$CHECK_ONLY" = 1 ]; then
 fi
 
 # запоминаем текущее состояние
-strategy=general; gf=off; ips=loaded
+strategy=general; gf=off; ips=none
 if [ -f "$ETC_DIR/active.env" ]; then
   # shellcheck disable=SC1091
   . "$ETC_DIR/active.env"; strategy="${STRATEGY_FILE:-general}"
@@ -82,9 +82,23 @@ curl -fsSL --max-time 120 \
   "https://codeload.github.com/$UPDATE_REPO/tar.gz/refs/heads/$UPDATE_BRANCH" \
   -o "$tmp/src.tar.gz" || die "не удалось скачать архив"
 tar -xzf "$tmp/src.tar.gz" -C "$tmp" || die "архив повреждён"
-src="$(find "$tmp" -maxdepth 1 -type d -name '*zapret-linux*' | head -n1)"
-[ -d "$src" ] || die "неожиданная структура архива"
+# каталог с исходниками — единственный каталог верхнего уровня (имя зависит от форка и ветки)
+dirs=()
+for d in "$tmp"/*/; do [ -d "$d" ] && dirs+=("${d%/}"); done
+[ "${#dirs[@]}" -eq 1 ] || die "неожиданная структура архива: ожидался один каталог верхнего уровня, найдено ${#dirs[@]}"
+src="${dirs[0]}"
 [ -f "$src/install.sh" ] || die "в архиве нет install.sh"
+
+# версия из самого архива: GitHub мог отдать файлы из кэша (до ~5 минут)
+new_ver="$(tr -d '[:space:]' < "$src/VERSION" 2>/dev/null || true)"
+[ -n "$new_ver" ] || die "в архиве нет VERSION"
+if [ "$new_ver" != "$remote_ver" ]; then
+  warn "версия в архиве ($new_ver) не совпадает с объявленной ($remote_ver): GitHub отдаёт файлы из кэша до ~5 минут"
+fi
+if [ "$FORCE" != 1 ] && ! newer "$local_ver" "$new_ver"; then
+  say "архив на GitHub ещё не обновился — повторите через 5 минут"
+  exit 0
+fi
 
 # переиспользуем уже собранный движок, чтобы не пересобирать и не качать заново
 if [ -x "$OPT_DIR/nfqws" ]; then
@@ -105,7 +119,9 @@ if SYNC=0 DEFAULT_STRATEGY="$strategy" bash "$src/install.sh"; then
   echo "$ips" > "$ETC_DIR/ipsetfilter"
   "$OPT_DIR/apply-strategy.sh" "$strategy" >/dev/null 2>&1 || \
     warn "не удалось переприменить стратегию '$strategy' — выберите вручную: zapret list"
-  say "обновлено: $local_ver -> $remote_ver"
+  # режим IPSet мог смениться при применении (переход loaded -> none в 1.1.5)
+  [ -f "$ETC_DIR/ipsetfilter" ] && ips="$(cat "$ETC_DIR/ipsetfilter")"
+  say "обновлено: $local_ver -> $new_ver"
   echo "  Настройки сохранены: стратегия=$strategy, gamefilter=$gf, ipset=$ips"
   echo "  Стратегии Flowseal обновляются отдельно: sudo zapret sync"
 else

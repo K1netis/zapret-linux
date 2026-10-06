@@ -59,6 +59,17 @@ slug() { # "general (FAKE TLS AUTO ALT3).bat" -> general_fake_tls_auto_alt3
     | sed -E 's/[^a-z0-9]+/_/g; s/^_+//; s/_+$//'
 }
 
+# Имя файла из ответа API идёт в пути под root: «../», «/», кавычки, $ и
+# управляющие символы недопустимы (раскодирование %2F иначе дало бы обход пути).
+safe_fname() {
+  case "$1" in
+    ''|.*|*/*|*\\*|*'$'*|*'`'*|*'"'*|*"'"*) return 1 ;;
+  esac
+  case "$1" in *[[:cntrl:]]*) return 1 ;; esac
+  return 0
+}
+warn_fname() { warn "подозрительное имя файла, пропущено: $(printf '%s' "$1" | tr '[:cntrl:]' '?')"; }
+
 fetch() { curl -fsSL --max-time 60 "$1" -o "$2"; }
 
 echo "sync: репозиторий=$REPO ветка/тег=$REF"
@@ -79,6 +90,7 @@ failed=""                             # стратегии, которые не 
 while IFS= read -r url; do
   [ -n "$url" ] || continue
   fname="$(urldecode "$(basename "$url")")"
+  safe_fname "$fname" || { warn_fname "$fname"; continue; }
   fetch "$url" "$STAGE/bat/$fname" || die "не удалось скачать $fname"
   [ -s "$STAGE/bat/$fname" ]       || die "скачан пустой файл $fname"
   name="$(slug "$fname")"
@@ -96,16 +108,22 @@ while IFS= read -r url; do
 done <<< "$bat_urls"
 
 while IFS= read -r url; do
-  case "$url" in *.txt) ;; *) continue ;; esac
+  # кроме *.txt нужен полный список IP для режима ipset loaded: у Flowseal
+  # он лежит под именем ipset-all.txt.backup
+  case "$url" in *.txt|*/ipset-all.txt.backup) ;; *) continue ;; esac
   fname="$(urldecode "$(basename "$url")")"
+  safe_fname "$fname" || { warn_fname "$fname"; continue; }
+  case "$fname" in *.txt|ipset-all.txt.backup) ;; *) continue ;; esac
   case "$fname" in *-user.txt) continue ;; esac     # списки пользователя не трогаем
   fetch "$url" "$STAGE/lists/$fname" || die "не удалось скачать lists/$fname"
+  [ "$fname" = ipset-all.txt.backup ] && continue   # очистка *.txt его не касается
   up_lists="$up_lists $fname"
 done <<< "$lists_urls"
 
 while IFS= read -r url; do
   case "$url" in *.bin) ;; *) continue ;; esac
   fname="$(urldecode "$(basename "$url")")"
+  safe_fname "$fname" || { warn_fname "$fname"; continue; }
   fetch "$url" "$STAGE/bin/$fname" || die "не удалось скачать bin/$fname"
   up_bin="$up_bin $fname"
 done <<< "$bin_urls"
@@ -127,6 +145,7 @@ place() { # временный файл -> рабочий, с подсчётом
 echo "sync: изменения"
 for f in "$STAGE"/strategies/*.conf; do [ -e "$f" ] && place "$f" "$STRAT_DIR/$(basename "$f")" "strategies/$(basename "$f")"; done
 for f in "$STAGE"/lists/*.txt;       do [ -e "$f" ] && place "$f" "$LISTS_DIR/$(basename "$f")"  "lists/$(basename "$f")"; done
+for f in "$STAGE"/lists/ipset-all.txt.backup; do [ -e "$f" ] && place "$f" "$LISTS_DIR/$(basename "$f")" "lists/$(basename "$f")"; done
 for f in "$STAGE"/bin/*.bin;         do [ -e "$f" ] && place "$f" "$BIN_DIR/$(basename "$f")"    "bin/$(basename "$f")"; done
 
 # исходные .bat храним рядом для справки — заменяем каталог целиком

@@ -47,19 +47,21 @@ case "${1:-status}" in
     ;;
   set)
     type="${2:-}"; file="${3:-}"
-    [ -n "$type" ] && [ -n "$file" ] || { echo "usage: fakes.sh set <тип> <файл.bin>" >&2; exit 2; }
+    [ -n "$type" ] && [ -n "$file" ] || { echo "использование: fakes.sh set <тип> <файл.bin>" >&2; exit 2; }
+    [[ "$type" =~ ^[a-z][a-z-]*$ ]] || { echo "fakes.sh: недопустимый тип '$type' (строчные латинские буквы и '-', например tls, quic, unknown-udp)" >&2; exit 1; }
+    [[ "$file" =~ ^[A-Za-z0-9._-]+\.bin$ ]] || { echo "fakes.sh: недопустимое имя файла '$file' (только имя .bin из каталога bin/, без пути)" >&2; exit 1; }
     [ -f "$BIN_DIR/$file" ] || { echo "fakes.sh: нет файла $BIN_DIR/$file" >&2; exit 1; }
     mkdir -p "$ETC_DIR"; touch "$MAP"
-    grep -v "^$type " "$MAP" > "$MAP.tmp" 2>/dev/null || true
+    awk -v t="$type" '$1 != t' "$MAP" > "$MAP.tmp" 2>/dev/null || true
     echo "$type $file" >> "$MAP.tmp"; mv "$MAP.tmp" "$MAP"
     echo "fakes: $type -> $file, переприменяю стратегию..."
     exec "$APPLY" "$(current_strategy)"
     ;;
   unset)
     type="${2:-}"
-    [ -n "$type" ] || { echo "usage: fakes.sh unset <тип>" >&2; exit 2; }
+    [ -n "$type" ] || { echo "использование: fakes.sh unset <тип>" >&2; exit 2; }
     [ -f "$MAP" ] || { echo "fakes: подмен нет"; exit 0; }
-    grep -v "^$type " "$MAP" > "$MAP.tmp" || true; mv "$MAP.tmp" "$MAP"
+    awk -v t="$type" '$1 != t' "$MAP" > "$MAP.tmp" || true; mv "$MAP.tmp" "$MAP"
     echo "fakes: подмена для '$type' убрана, переприменяю стратегию..."
     exec "$APPLY" "$(current_strategy)"
     ;;
@@ -71,5 +73,5 @@ case "${1:-status}" in
     fi
     ;;
   *)
-    echo "usage: fakes.sh {list|types|set <тип> <файл>|unset <тип>|status}" >&2; exit 2 ;;
+    echo "использование: fakes.sh {list|types|set <тип> <файл>|unset <тип>|status}" >&2; exit 2 ;;
 esac

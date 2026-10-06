@@ -1,0 +1,39 @@
+# targets.txt — список адресов для команды `zapret test`.
+#
+# Формат (тот же, что у Flowseal):
+#   Имя = "https://хост"   -> для адреса выполняются проверки TLS 1.2, TLS 1.3,
+#                             HTTP/1.1, загрузка первых 64 КБ и (если curl
+#                             умеет HTTP/3) QUIC
+#   Имя = "PING:1.2.3.4"   -> строки PING пропускаются: ping в тесте не нужен
+#
+# Имя — одно слово из латинских букв, цифр и подчёркивания; оно же показывается
+# в отчёте. Строки, начинающиеся с #, игнорируются.
+# Можно добавлять свои строки и удалять лишние: больше целей — дольше проверка.
+# Файл устанавливается в /opt/zapret-linux и при обновлении заменяется;
+# свои цели удобнее держать в копии и указывать её через TARGETS_FILE.
+
+### Discord
+DiscordMain           = "https://discord.com"
+DiscordGateway        = "https://gateway.discord.gg"
+DiscordCDN            = "https://cdn.discordapp.com"
+DiscordUpdates        = "https://updates.discord.com"
+
+### YouTube
+YouTubeWeb            = "https://www.youtube.com"
+YouTubeShort          = "https://youtu.be"
+YouTubeImage          = "https://i.ytimg.com"
+YouTubeVideoRedirect  = "https://redirector.googlevideo.com"
+
+### Google
+GoogleMain            = "https://www.google.com"
+GoogleGstatic         = "https://www.gstatic.com"
+
+### Cloudflare
+CloudflareWeb         = "https://www.cloudflare.com"
+CloudflareCDN         = "https://cdnjs.cloudflare.com"
+
+### Публичный DNS (только ping, пропускается)
+# CloudflareDNS1111   = "PING:1.1.1.1"
+# CloudflareDNS1001   = "PING:1.0.0.1"
+# GoogleDNS8888       = "PING:8.8.8.8"
+# GoogleDNS8844       = "PING:8.8.4.4"

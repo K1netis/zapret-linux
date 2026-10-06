@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Подменный id: скрипты проверяют права root через «id -u». В тестах root не нужен.
+if [ "${1:-}" = "-u" ]; then echo 0; exit 0; fi
+for real in /usr/bin/id /bin/id; do [ -x "$real" ] && exec "$real" "$@"; done
+exit 1

@@ -21,6 +21,10 @@ warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 
 [ "$(id -u)" = 0 ] || { echo "запустите через sudo" >&2; exit 1; }
 
+# Защита от rm -rf по случайному значению из окружения.
+case "$OPT_DIR" in */zapret-linux) ;; *) echo "отказ: OPT_DIR='$OPT_DIR' не оканчивается на /zapret-linux" >&2; exit 1 ;; esac
+case "$ETC_DIR" in */zapret-linux) ;; *) echo "отказ: ETC_DIR='$ETC_DIR' не оканчивается на /zapret-linux" >&2; exit 1 ;; esac
+
 ASSUME_YES=0; KEEP_LISTS=0
 for a in "$@"; do
   case "$a" in

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Подменный systemctl: тесты не должны трогать настоящую службу.
+[ -n "${MOCK_SYSTEMCTL_LOG:-}" ] && echo "systemctl $*" >> "$MOCK_SYSTEMCTL_LOG"
+exit 0

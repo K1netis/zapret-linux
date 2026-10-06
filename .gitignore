@@ -4,6 +4,7 @@
 # скачивается из Flowseal при установке и синхронизации
 strategies/*.conf
 lists/*.txt
+lists/*.backup
 bin/*.bin
 flowseal-src/
 
