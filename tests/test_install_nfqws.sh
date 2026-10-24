@@ -14,15 +14,21 @@ check "строка создания ipsetfilter найдена (одна)" test
 # Запуск блока: $1 — архитектура (uname -m); результат: «NFQWS|вызвана ли сборка»
 pick() (
   ENGINE_DIR="$TMP/eng"; OPT_DIR="$TMP/optI"
-  say() { :; }; die() { echo "DIE:$*"; exit 1; }
+  say() { :; }; die() { echo "$*" > "$TMP/die_log"; exit 1; }
   uname() { echo "$FAKE_ARCH"; }
-  make() { echo build >> "$TMP/make_log"; exe "$TMP/eng/nfq/nfqws"; }
+  # Что «установлено» на машине, определяет только HAVE (по умолчанию make и cc):
+  # настоящие PATH, dnf, pacman, apt-get и cc машины на результат не влияют.
+  command() {
+    if [ "${1:-}" = -v ]; then case " ${HAVE-make cc} " in *" $2 "*) return 0 ;; *) return 1 ;; esac; fi
+    builtin command "$@"
+  }
+  make() { echo build >> "$TMP/make_log"; [ -z "${MAKE_FAIL:-}" ] || return 1; exe "$TMP/eng/nfq/nfqws"; }
   FAKE_ARCH="$1"
   . "$TMP/pick.sh" >/dev/null 2>&1
   echo "${NFQWS:-}"
 )
 exe() { mkdir -p "$(dirname "$1")"; printf '#!/bin/sh\n' > "$1"; chmod +x "$1"; }
-reset() { rm -rf "$TMP/eng" "$TMP/optI" "$TMP/make_log"; mkdir -p "$TMP/eng/nfq" "$TMP/optI"; }
+reset() { rm -rf "$TMP/eng" "$TMP/optI" "$TMP/make_log" "$TMP/die_log"; mkdir -p "$TMP/eng/nfq" "$TMP/optI"; }
 
 section "Выбор nfqws"
 reset; exe "$TMP/eng/nfq/nfqws"; exe "$TMP/optI/nfqws"; exe "$TMP/eng/binaries/linux-x86_64/nfqws"
@@ -53,6 +59,74 @@ check "неизвестная архитектура: готовый бинар�
 reset
 check "нет ничего: после сборки путь nfq/nfqws"   test "$(pick x86_64)" = "$TMP/eng/nfq/nfqws"
 check "нет ничего: сборка запущена"               test -s "$TMP/make_log"
+
+section "Сборка nfqws: зависимости и подсказка"
+# nfqws нет нигде — доходит до сборки. HAVE — «установленные» команды.
+build() { reset; HAVE="$1" MAKE_FAIL="${2:-}" pick x86_64 >/dev/null; }
+build "make cc"
+check "всё есть: сборка запущена"                 test -s "$TMP/make_log"
+check "всё есть: ошибки нет"                      test ! -e "$TMP/die_log"
+build "cc"
+check "нет make: отказ"                           has "$TMP/die_log" "для сборки nfqws нужны компилятор и make"
+check "нет make: сборка не запускалась"           test ! -e "$TMP/make_log"
+build "make"
+check "нет cc: отказ"                             has "$TMP/die_log" "для сборки nfqws нужны компилятор и make"
+check "нет cc: сборка не запускалась"             test ! -e "$TMP/make_log"
+build ""
+check "нет ни make, ни cc: отказ без сборки"      test -s "$TMP/die_log" -a ! -e "$TMP/make_log"
+build "cc dnf"
+check "dnf без make: отказ"                       has "$TMP/die_log" "нужны компилятор и make"
+
+build "make cc dnf" 1
+check "make упал: сообщение о сборке"             has "$TMP/die_log" "сборка nfqws не удалась"
+check "make упал: подсказка с зависимостями"      has "$TMP/die_log" "zlib-devel"
+check "make упал: nfqws не выбран"                test ! -x "$TMP/eng/nfq/nfqws"
+
+build "make cc dnf pacman apt-get" 1
+check "dnf: подсказка с zlib-devel"               has "$TMP/die_log" "zlib-devel"
+check "dnf: подсказка с libnetfilter_queue-devel" has "$TMP/die_log" "libnetfilter_queue-devel"
+check_not "dnf: без пакетов apt"                  has "$TMP/die_log" "zlib1g-dev"
+check_not "dnf: без пакетов pacman"               has "$TMP/die_log" "base-devel"
+build "make cc pacman apt-get" 1
+check "pacman: подсказка с base-devel"            has "$TMP/die_log" "base-devel"
+check_not "pacman: без zlib1g-dev"                has "$TMP/die_log" "zlib1g-dev"
+check_not "pacman: без zlib-devel"                has "$TMP/die_log" "zlib-devel"
+build "make cc apt-get" 1
+check "apt-get: подсказка с zlib1g-dev"           has "$TMP/die_log" "zlib1g-dev"
+check_not "apt-get: без base-devel"               has "$TMP/die_log" "base-devel"
+build "make cc" 1
+check "нет менеджера пакетов: общий текст"        has "$TMP/die_log" "пакеты разработки zlib"
+check_not "общий текст без команд установки"      has "$TMP/die_log" "sudo "
+build "cc dnf"
+check "нет make при dnf: подсказка dnf в отказе"  has "$TMP/die_log" "libnetfilter_queue-devel"
+build "cc"
+check "нет make и менеджера: общий текст"         has "$TMP/die_log" "пакеты разработки zlib"
+
+section "Метки SELinux после установки (restorecon)"
+sed -n '/^if command -v restorecon/,/^fi/p' "$ROOT/install.sh" > "$TMP/rc.sh"
+check "блок restorecon найден в install.sh"       has_re "$TMP/rc.sh" '^fi'
+RCB="$TMP/rcbin"; mkdir -p "$RCB"
+rc_run() ( # $1 — код возврата макета restorecon, пустой — команды нет
+  rm -f "$TMP/rc_log"
+  if [ -n "$1" ]; then
+    printf '#!/bin/sh\necho "$*" >> "%s"\nexit %s\n' "$TMP/rc_log" "$1" > "$RCB/restorecon"
+    chmod +x "$RCB/restorecon"
+  else rm -f "$RCB/restorecon"; fi
+  OPT_DIR="/opt/zl x"; ETC_DIR="/etc/zl"
+  # PATH — только макет и /usr/bin:/bin без настоящего restorecon
+  [ -n "$1" ] || { command() { if [ "${1:-}" = -v ] && [ "$2" = restorecon ]; then return 1; fi; builtin command "$@"; }; }
+  set -e
+  . "$TMP/rc.sh"
+)
+PATH="$RCB:$PATH" rc_run 0; code=$?
+check "restorecon есть: блок завершился успешно"  test "$code" -eq 0
+check "вызван с -RF и тремя путями"               test "$(cat "$TMP/rc_log")" = "-RF /opt/zl x /etc/zl /etc/systemd/system/zapret-linux.service"
+PATH="$RCB:$PATH" rc_run 1; code=$?
+check "restorecon вернул ошибку: установка не падает (set -e)" test "$code" -eq 0
+check "при ошибке он всё же вызывался"            test -s "$TMP/rc_log"
+PATH="$RCB:$PATH" rc_run ""; code=$?
+check "restorecon нет: блок не падает (set -e)"   test "$code" -eq 0
+check "restorecon нет: ничего не вызвано"         test ! -e "$TMP/rc_log"
 
 section "Режим IPSet по умолчанию"
 E="$TMP/etcI"; mkdir -p "$E"

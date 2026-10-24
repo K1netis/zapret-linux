@@ -8,9 +8,11 @@ Wants=network-online.target
 Type=simple
 EnvironmentFile=/etc/zapret-linux/active.env
 # Создаём правила nftables, запускаем nfqws, при остановке правила снимаем.
-ExecStartPre=/opt/zapret-linux/lib/fw.sh up
-ExecStart=/etc/zapret-linux/nfqws.cmd
-ExecStopPost=/opt/zapret-linux/lib/fw.sh down
+# Скрипты запускаются через интерпретатор: при SELinux (Fedora, RHEL) systemd
+# может отказать в прямом запуске файлов из /opt и /etc.
+ExecStartPre=/bin/bash /opt/zapret-linux/lib/fw.sh up
+ExecStart=/bin/sh /etc/zapret-linux/nfqws.cmd
+ExecStopPost=/bin/bash /opt/zapret-linux/lib/fw.sh down
 Restart=on-failure
 RestartSec=2
 # nfqws нужен доступ к NFQUEUE и возможность отправлять пакеты.

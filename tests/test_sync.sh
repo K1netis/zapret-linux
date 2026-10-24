@@ -155,4 +155,31 @@ check "нет файлов pwn.bin и evil.txt в установке" test -z "$
 check "обычные файлы синхронизируются дальше"  test -f "$INST/bin/x.bin" -a -f "$INST/lists/list-general.txt"
 rm -f "$UP/.payload" "$UP/.extra_urls" "$UP/bin/.extra_urls" "$UP/lists/.extra_urls" "$UP/bin/.hidden.bin" "$UP/lists/.hidden.txt"
 
+section "Метки SELinux (restorecon)"
+RC="$TMP/rcmock"; mkdir -p "$RC"
+rc_mock() { # $1 — код возврата макета
+  printf '#!/bin/sh\necho "$*" >> "%s"\nexit %s\n' "$TMP/rc_log" "$1" > "$RC/restorecon"; chmod +x "$RC/restorecon"
+}
+echo "новое" > "$UP/lists/list-new.txt"
+rm -f "$TMP/rc_log"; rc_mock 0
+PATH="$RC:$PATH" sync_run; code=$?
+check "restorecon есть: синхронизация успешна"     test "$code" -eq 0
+check "restorecon вызван с -RF и тремя каталогами" test "$(cat "$TMP/rc_log")" = "-RF $INST/strategies $INST/lists $INST/bin"
+echo "ещё" > "$UP/lists/list-new2.txt"
+rm -f "$TMP/rc_log"; rc_mock 1
+PATH="$RC:$PATH" sync_run; code=$?
+check "restorecon вернул ошибку: синхронизация успешна" test "$code" -eq 0
+check "при ошибке он всё же вызывался"             test -s "$TMP/rc_log"
+check "при ошибке файлы скачаны"                   test -f "$INST/lists/list-new2.txt"
+# PATH без restorecon (на машине с SELinux настоящий был бы найден)
+NP="$TMP/nopath"; mkdir -p "$NP"
+IFS=: read -ra _pd <<< "$PATH"
+for d in "${_pd[@]}"; do for f in "$d"/*; do [ -x "$f" ] && [ ! -d "$f" ] && [ "${f##*/}" != restorecon ] && ln -sf "$f" "$NP/${f##*/}" 2>/dev/null; done; done
+echo "третий" > "$UP/lists/list-new3.txt"
+rm -f "$TMP/rc_log"
+PATH="$NP" sync_run; code=$?
+check "restorecon нет: синхронизация успешна"      test "$code" -eq 0
+check "restorecon нет: файлы скачаны"              test -f "$INST/lists/list-new3.txt"
+check "restorecon нет: ничего не вызвано"          test ! -e "$TMP/rc_log"
+
 finish

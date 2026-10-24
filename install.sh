@@ -70,8 +70,19 @@ else
 fi
 if [ -z "$NFQWS" ]; then
   say "собираю nfqws из исходников"
+  if command -v dnf >/dev/null 2>&1; then
+    deps="sudo dnf install gcc make zlib-devel libnetfilter_queue-devel libnfnetlink-devel libmnl-devel"
+  elif command -v pacman >/dev/null 2>&1; then
+    deps="sudo pacman -S base-devel libnetfilter_queue libnfnetlink libmnl"
+  elif command -v apt-get >/dev/null 2>&1; then
+    deps="sudo apt install gcc make zlib1g-dev libnetfilter-queue-dev libnfnetlink-dev libmnl-dev"
+  else
+    deps="gcc, make и пакеты разработки zlib, libnetfilter_queue, libnfnetlink, libmnl"
+  fi
+  command -v make >/dev/null 2>&1 && command -v cc >/dev/null 2>&1 \
+    || die "для сборки nfqws нужны компилятор и make. Установите зависимости: $deps"
   make -C "$ENGINE_DIR/nfq" nfqws \
-    || die "сборка nfqws не удалась. Установите зависимости: gcc make zlib1g-dev libnetfilter-queue-dev libnfnetlink-dev libmnl-dev"
+    || die "сборка nfqws не удалась. Установите зависимости: $deps"
   NFQWS="$ENGINE_DIR/nfq/nfqws"
 fi
 [ -x "$NFQWS" ] || die "не удалось получить рабочий бинарник nfqws"
@@ -165,6 +176,12 @@ put "$SRC/VERSION" "$OPT_DIR/VERSION"
 mkdir -p "$ETC_DIR"
 [ -f "$ETC_DIR/gamefilter" ] || echo off > "$ETC_DIR/gamefilter"
 [ -f "$ETC_DIR/ipsetfilter" ] || echo none > "$ETC_DIR/ipsetfilter"
+# SELinux (Fedora, RHEL): cp -a и mv переносят метку исходного места (домашний
+# каталог, /tmp), и служба не может прочитать или запустить такие файлы.
+# Возвращаем метки, положенные /opt и /etc.
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -RF "$OPT_DIR" "$ETC_DIR" /etc/systemd/system/zapret-linux.service >/dev/null 2>&1 || true
+fi
 if [ "${ASSETS_OK:-1}" != 1 ]; then
   if [ -n "$PREV_VERSION" ]; then
     # переустановка: файлы уже обновлены и VERSION записан — это не сбой
@@ -198,7 +215,7 @@ $(say "готово")  Управление одной командой:
 
   zapret                 краткая сводка
   zapret status          полная диагностика (счётчики nftables)
-  zapret test            проверка обхода на текущей стратегии
+  zapret test            проверить все стратегии и выбрать лучшую
   zapret list            список стратегий ($(ls -1 "$OPT_DIR"/strategies/*.conf 2>/dev/null | wc -l) шт.)
   zapret use <имя>       переключить стратегию
   zapret game all        игровой фильтр (off|tcp|udp|all)

@@ -78,6 +78,10 @@ if [ -z "$a" ]; then idx=none
 elif [ "$a" -ge 29900 ] 2>/dev/null; then idx=base
 else idx=$(( (a - 20000) / 100 )); fi
 echo "$lp $host $chk" >> "$MOCK_CURL_LOG"
+if [ -n "${MOCK_CURL_RUN:-}" ]; then
+  mkdir -p "$MOCK_CURL_RUN"; : > "$MOCK_CURL_RUN/$$"
+  trap 'rm -f "$MOCK_CURL_RUN/$$"' EXIT
+fi
 [ -n "${MOCK_CURL_SLEEP:-}" ] && sleep "$MOCK_CURL_SLEEP"
 res="ok:0.100"
 if [ -f "${MOCK_SCEN:-}" ]; then
@@ -94,8 +98,12 @@ case "$res" in
   once:*)
     key="$(printf '%s_%s_%s' "$lp" "$host" "$chk" | tr -c 'A-Za-z0-9.\n-' '_')"
     mkdir -p "$MOCK_CURL_STATE"
-    if [ -e "$MOCK_CURL_STATE/$key" ]; then res="ok:0.100"; else : > "$MOCK_CURL_STATE/$key"; res="${res#once:}"; fi ;;
+    if [ -e "$MOCK_CURL_STATE/$key" ]; then res="ok:0.100"; retried=1; else : > "$MOCK_CURL_STATE/$key"; res="${res#once:}"; fi ;;
 esac
+# параллельность: сколько проверок идёт сейчас и повтор ли это (1 — повтор)
+if [ -n "${MOCK_CURL_CONC:-}" ] && [ -n "${MOCK_CURL_RUN:-}" ]; then
+  echo "$(ls "$MOCK_CURL_RUN" | wc -l) ${retried:-0}" >> "$MOCK_CURL_CONC"
+fi
 code=0; http=200; t=0.100; size=1234
 case "$res" in
   noport)  code=45; http=000; size=0 ;;
@@ -150,10 +158,10 @@ run_st() {
   local out="$1"; shift
   env PATH="$MB:$MOCK:$PATH" TMPDIR="$TD" OPT_DIR="$OPT" ETC_DIR="$ETC" \
     NFQWS_BIN="$MB/nfqws" TARGETS_FILE="${TARGETS_FILE_T:-$TMP/targets.txt}" TIMEOUT=5 CONNECT_TIMEOUT=3 \
-    PARALLEL=8 QBASE=210 PBASE=20000 REPORT="$TMP/report.txt" APPLY="$MB/apply-stub" \
+    PARALLEL="${PARALLEL_T:-8}" QBASE=210 PBASE=20000 REPORT="$TMP/report.txt" APPLY="$MB/apply-stub" \
     STUB_DIR="$SD" MOCK_SCEN="$TMP/scen" MOCK_NFT_LOG="$TMP/nft.log" \
     MOCK_NFQWS_DIR="$NQ" MOCK_CURL_LOG="$TMP/curl.log" MOCK_SYSTEMCTL_LOG="$TMP/sc.log" \
-    MOCK_CURL_H3="${MOCK_CURL_H3:-}" MOCK_CURL_SLEEP="${MOCK_CURL_SLEEP:-}" MOCK_CURL_STATE="$TMP/cstate" \
+    MOCK_CURL_H3="${MOCK_CURL_H3:-}" MOCK_CURL_SLEEP="${MOCK_CURL_SLEEP:-}" MOCK_CURL_STATE="$TMP/cstate" MOCK_CURL_RUN="${MOCK_CURL_RUN:-}" MOCK_CURL_CONC="${MOCK_CURL_CONC:-}" \
     timeout 90 bash "$ROOT/selftest.sh" "$@" > "$out.raw" 2>&1
   local code=$?
   sed 's/\x1b\[[0-9;]*[A-Za-z]//g' "$out.raw" > "$out"
@@ -300,28 +308,118 @@ check "есть правила для портов 29900-29999 (tcp и udp)" tes
 check "правила ставят метку 0x20000000"            bash -c "grep -c 'meta mark set meta mark or 0x20000000' '$TMP/base.rules' | grep -qv '^0'"
 check_not "в правилах базовой линии нет queue"     grep -q 'queue' "$TMP/base.rules"
 
-section "Повтор единичных провалов"
+section "Повтор случайных провалов"
+cat > "$TMP/targets7.txt" <<'M'
+PartA = "https://part.example"
+DeadA = "https://dead-a.example"
+DeadB = "https://dead-b.example"
+M
 strat r-a --filter-tcp=443 --dpi-desync=fake
 strat r-b --filter-tcp=443 --dpi-desync=fake
-strat r-c --filter-tcp=443 --dpi-desync=fake
 cat > "$TMP/scen" <<'M'
-0 discord.com tls12 once:reset
-1 * tls12 reset
-1 * tls13 reset
-1 * http11 reset
-2 * big noport
+0 part.example tls12 once:timeout
+0 part.example big once:reset
+0 dead-a.example * timeout
+0 dead-b.example * reset
+1 part.example tls12 noport
+1 part.example big noport
+base part.example tls12 once:timeout
 M
 reset_state
-run_st "$TMP/out3" r-a r-b r-c; code=$?
-check "завершается с кодом 0"                      test "$code" -eq 0
+TARGETS_FILE_T="$TMP/targets7.txt" run_st "$TMP/out3" r-a r-b; code=$?
 [ -n "${ST_KEEP:-}" ] && cp "$TMP/out3" "$ST_KEEP.3" && cp "$TMP/curl.log" "$ST_KEEP.3curl"
-check "в выводе «Повторяю единичные провалы»"      has "$TMP/out3" "Повторяю единичные провалы"
-check "один провал: задание выполнено дважды"      test "$(grep -c '^20000-20099 discord.com tls12$' "$TMP/curl.log")" -eq 2
-check "один провал: остальные задания по одному разу" test "$(grep '^20000-' "$TMP/curl.log" | grep -vc 'discord.com tls12$')" -eq 7
-check "результат повтора заменил первый: у r-a 8/8" bash -c "sed -n '/Рейтинг/,/^\$/p' '$TMP/out3' | grep -w r-a | grep -q '8/8'"
-check "3 и больше провалов: каждое задание ровно один раз" \
-  bash -c "grep '^20100-' '$TMP/curl.log' | sort | uniq -c | awk '\$1 != 1 {bad=1} END {exit bad || NR != 8}'"
-check "код 45 не повторяется"                      bash -c "grep '^20200-' '$TMP/curl.log' | sort | uniq -c | awk '\$1 != 1 {bad=1} END {exit bad || NR != 8}'"
+cnt() { grep -c "^$1 $2 $3\$" "$TMP/curl.log"; }
+check "завершается с кодом 0"                      test "$code" -eq 0
+check "в выводе «Повторяю случайные провалы: 2»"   has "$TMP/out3" "Повторяю случайные провалы: 2"
+check_not "старого сообщения «единичные» нет"      has "$TMP/out3" "Повторяю единичные провалы"
+check "частичная цель: tls12 выполнен дважды"      test "$(cnt 20000-20099 part.example tls12)" -eq 2
+check "частичная цель: big выполнен дважды"        test "$(cnt 20000-20099 part.example big)" -eq 2
+check "частичная цель: успешные http11 и tls13 один раз" \
+  test "$(cnt 20000-20099 part.example http11)$(cnt 20000-20099 part.example tls13)" = 11
+check "у стратегии больше двух провалов — частичная цель всё равно повторена (главный случай)" \
+  test "$(cnt 20000-20099 part.example tls12)" -eq 2
+for h in dead-a.example dead-b.example; do
+  check "полностью проваленная цель $h не повторена" \
+    bash -c "grep '^20000-20099 $h ' '$TMP/curl.log' | sort | uniq -c | awk '\$1 != 1 {bad=1} END {exit bad || NR != 4}'"
+done
+check "рейтинг r-a: PartA не среди частичных (повтор прошёл)" \
+  bash -c "! sed -n '/Рейтинг/,/^\$/p' '$TMP/out3' | grep -w r-a | grep -q 'PartA: частично'"
+check "код 45 не повторяется"                      bash -c "grep '^20100-20199 part.example ' '$TMP/curl.log' | sort | uniq -c | awk '\$1 != 1 {bad=1} END {exit bad || NR != 4}'"
+check "базовая линия не повторяется"               test "$(cnt 29900-29999 part.example tls12)" -eq 1
+check "базовая линия: остальные проверки по одному разу" \
+  bash -c "grep '^29900-' '$TMP/curl.log' | sort | uniq -c | awk '\$1 != 1 {bad=1} END {exit bad}'"
+
+section "Повтор: QUIC (h3) не повторяется"
+cat > "$TMP/targets8.txt" <<'M'
+PartH = "https://parth.example"
+QuicH = "https://quich.example"
+M
+strat q-a --filter-tcp=443 --dpi-desync=fake
+cat > "$TMP/scen" <<'M'
+0 parth.example tls12 once:timeout
+0 parth.example h3 timeout
+0 quich.example h3 once:timeout
+M
+reset_state
+TARGETS_FILE_T="$TMP/targets8.txt" MOCK_CURL_H3=1 run_st "$TMP/out3h" q-a; code=$?
+check "завершается с кодом 0"                      test "$code" -eq 0
+check "h3 выполнялась"                             has_re "$TMP/curl.log" 'parth.example h3$'
+check "TCP-провал рядом с h3 повторён"             test "$(cnt 20000-20099 parth.example tls12)" -eq 2
+check "h3 при частичной цели не повторена"         test "$(cnt 20000-20099 parth.example h3)" -eq 1
+check "h3 с TCP целиком успешным не повторена"     test "$(cnt 20000-20099 quich.example h3)" -eq 1
+check "повторено ровно одно задание"               has "$TMP/out3h" "Повторяю случайные провалы: 1 "
+
+section "Повтор: не больше PARALLEL одновременно"
+cat > "$TMP/targets9.txt" <<'M'
+T1 = "https://t1.example"
+T2 = "https://t2.example"
+T3 = "https://t3.example"
+M
+strat c-a --filter-tcp=443 --dpi-desync=fake
+cat > "$TMP/scen" <<'M'
+0 t1.example tls12 once:timeout
+0 t1.example tls13 once:timeout
+0 t2.example tls12 once:timeout
+0 t2.example tls13 once:timeout
+0 t3.example tls12 once:timeout
+0 t3.example tls13 once:timeout
+M
+reset_state
+rm -rf "$TMP/crun"; : > "$TMP/conc.log"
+TARGETS_FILE_T="$TMP/targets9.txt" PARALLEL_T=2 MOCK_CURL_SLEEP=0.4 MOCK_CURL_RUN="$TMP/crun" MOCK_CURL_CONC="$TMP/conc.log" \
+  run_st "$TMP/out3p" c-a; code=$?
+check "завершается с кодом 0"                      test "$code" -eq 0
+check "повторяется 6 заданий"                      has "$TMP/out3p" "Повторяю случайные провалы: 6 "
+check "повторы выполнялись (записи в журнале)"     test "$(grep -c ' 1$' "$TMP/conc.log")" -eq 6
+check "повторы шли по два одновременно"            bash -c "grep ' 1\$' '$TMP/conc.log' | awk '\$1 == 2 {f=1} END {exit !f}'"
+check "одновременных повторов не больше PARALLEL=2" bash -c "grep ' 1\$' '$TMP/conc.log' | awk '\$1 > 2 {bad=1} END {exit bad}'"
+
+section "Подсказка про игровой фильтр в итогах"
+strat g-a --filter-tcp=443 --dpi-desync=fake
+cat > "$TMP/scen" <<'M'
+M
+gfsum() { # режим фильтра (или -) режим ipset (или -)
+  rm -f "$ETC/gamefilter" "$ETC/ipsetfilter"
+  [ "$1" = - ] || echo "$1" > "$ETC/gamefilter"
+  [ "$2" = - ] || echo "$2" > "$ETC/ipsetfilter"
+  reset_state
+  run_st "$TMP/outg" g-a
+}
+gfsum off none
+check "фильтр off, ipset none: про игровой фильтр ничего" bash -c "! grep -q 'Игровой фильтр' '$TMP/outg'"
+check "фильтр off: нет старого совета про sudo zapret game" bash -c "! grep -q 'zapret game' '$TMP/outg'"
+gfsum udp none
+check "udp + ipset none: сообщение «включён (udp)»" has "$TMP/outg" "Игровой фильтр включён (udp), но при режиме IPSet none он не действует ни на один адрес."
+check "udp + ipset none: совет sudo zapret ipset loaded" has "$TMP/outg" "sudo zapret ipset loaded"
+gfsum all -
+check "all, файла ipsetfilter нет: предупреждение"  has "$TMP/outg" "Игровой фильтр включён (all)"
+gfsum udp loaded
+check "udp + ipset loaded: предупреждения нет"      bash -c "! grep -q 'Игровой фильтр' '$TMP/outg'"
+gfsum tcp any
+check "tcp + ipset any: предупреждения нет"         bash -c "! grep -q 'Игровой фильтр' '$TMP/outg'"
+gfsum - -
+check "нет файла gamefilter: предупреждения нет"    bash -c "! grep -q 'Игровой фильтр' '$TMP/outg'"
+rm -f "$ETC/gamefilter" "$ETC/ipsetfilter"
 
 section "Скорость от лучшей в группе"
 strat v-a --filter-tcp=443 --dpi-desync=fake --dpi-desync-repeats=60
@@ -420,10 +518,10 @@ M
   reset_state
   env PATH="$MB:$MOCK:$PATH" TMPDIR="$TD" OPT_DIR="$OPT" ETC_DIR="$ETC" \
     NFQWS_BIN="$MB/nfqws" TARGETS_FILE="$TMP/targets.txt" TIMEOUT=5 CONNECT_TIMEOUT=3 \
-    PARALLEL=8 QBASE=210 PBASE=20000 REPORT="$TMP/report.txt" APPLY="$MB/apply-stub" \
+    PARALLEL="${PARALLEL_T:-8}" QBASE=210 PBASE=20000 REPORT="$TMP/report.txt" APPLY="$MB/apply-stub" \
     STUB_DIR="$SD" MOCK_SCEN="$TMP/scen" MOCK_NFT_LOG="$TMP/nft.log" \
     MOCK_NFQWS_DIR="$NQ" MOCK_CURL_LOG="$TMP/curl.log" MOCK_SYSTEMCTL_LOG="$TMP/sc.log" \
-    MOCK_CURL_SLEEP=4 MOCK_CURL_STATE="$TMP/cstate" \
+    MOCK_CURL_SLEEP=4 MOCK_CURL_STATE="$TMP/cstate" MOCK_CURL_RUN="${MOCK_CURL_RUN:-}" MOCK_CURL_CONC="${MOCK_CURL_CONC:-}" \
     python3 -I "$TMP/intr.py" "$sg" "$ROOT/selftest.sh" g-one g-two g-three; code=$?
   check "$sg: selftest завершился сам"             test "$code" -eq 0
   check "$sg: nfqws успел запуститься"             test "$(ls "$NQ"/*.pid 2>/dev/null | wc -l)" -ge 2

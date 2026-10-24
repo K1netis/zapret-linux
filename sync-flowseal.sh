@@ -201,6 +201,12 @@ for f in "$BIN_DIR"/*.bin; do
   rm -f "$f"; removed=$((removed+1)); echo "  - bin/$name"
 done
 
+# SELinux: файлы перенесены из временного каталога вместе с его меткой — возвращаем
+# метки, положенные этому месту.
+if command -v restorecon >/dev/null 2>&1; then
+  restorecon -RF "$STRAT_DIR" "$LISTS_DIR" "$BIN_DIR" >/dev/null 2>&1 || true
+fi
+
 # Итог -----------------------------------------------------------------------------
 total="$(ls -1 "$STRAT_DIR"/*.conf 2>/dev/null | wc -l)"
 [ $((added+updated+removed)) -eq 0 ] && echo "  (изменений нет)"

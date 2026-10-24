@@ -49,6 +49,16 @@ save_ports() {
 
 # Проверка списка портов: числа и диапазоны через запятую, 1..65535,
 # начало диапазона не больше конца. Пробелы недопустимы.
+# Профили игрового фильтра у Flowseal ограничены списком IP (--ipset). В режиме
+# IPSet none там заглушка, и фильтр не действует ни на один адрес.
+warn_ipset_none() {
+  local ips=none
+  [ -f "$ETC_DIR/ipsetfilter" ] && ips="$(cat "$ETC_DIR/ipsetfilter")"
+  [ "$ips" = none ] || return 0
+  echo "gamefilter: ВНИМАНИЕ — режим IPSet 'none': игровой фильтр не действует ни на один адрес." >&2
+  echo "  Он работает только вместе со списком IP: sudo zapret ipset loaded" >&2
+}
+
 validate_ports() {
   local list="$1" item a b
   [ -n "$list" ] || { echo "пустой список портов" >&2; return 1; }
@@ -74,6 +84,7 @@ case "$mode" in
   off|tcp|udp|all)
     mkdir -p "$ETC_DIR"
     echo "$mode" > "$ETC_DIR/gamefilter"
+    [ "$mode" = off ] || warn_ipset_none
     echo "gamefilter: режим '$mode', переприменяю стратегию..."
     exec "$APPLY" "$(current_strategy)"
     ;;
@@ -118,6 +129,7 @@ case "$mode" in
     echo "  порты TCP: $GF_TCP"
     echo "  порты UDP: $GF_UDP"
     echo "активная стратегия: $(current_strategy)"
+    [ "$m" = off ] || warn_ipset_none 2>&1
     ;;
 
   *)

@@ -251,52 +251,49 @@ if command -v shuf >/dev/null 2>&1; then shuf "$JOBS" > "$JOBS.mix"; else sort -
 
 echo "Проверяю: стратегий ${#S_NAME[@]}, целей $NT, проверок на стратегию $NC (всего заданий $NJOBS), параллельно $PARALLEL ..."
 
-# пул заданий в отдельном процессе: так wait -n не путает задания с nfqws
-(
-  trap 'kill $(jobs -p) 2>/dev/null; exit 143' TERM
-  running=0
-  while IFS=$'\t' read -r jn js jt jc; do
-    if [ "$running" -ge "$PARALLEL" ]; then
-      wait -n
-      running=$((running - 1))
-    fi
-    run_job "$jn" "$js" "$jt" "$jc" &
-    running=$((running + 1))
-  done < "$JOBS.mix"
-  wait
-) &
-POOL_PID=$!
-wait "$POOL_PID"
-POOL_PID=""
-
-# Повтор: один-два провала у стратегии — скорее случайность сети, чем
-# блокировка; такие проверки выполняются ещё раз. Стратегии с большим числом
-# провалов не повторяются: время проверки не растёт.
-failed_of() { # стратегия -> номера проваленных заданий (кроме «нет порта»)
-  local f s rc
-  for f in "$TMP"/res/*; do
-    IFS=$'\t' read -r s _ _ rc _ < "$f"
-    [ "$s" = "$1" ] && [ "$rc" != 0 ] && [ "$rc" != 45 ] && echo "${f##*/}"
-  done
-}
-: > "$JOBS.retry"
-for ((s = 0; s < NS; s++)); do
-  [ "${STARTED[$s]}" = 1 ] || continue
-  mapfile -t fl < <(failed_of "$s")
-  if [ "${#fl[@]}" -ge 1 ] && [ "${#fl[@]}" -le 2 ]; then
-    for k in "${fl[@]}"; do awk -F'\t' -v k="$k" '$1 == k' "$JOBS" >> "$JOBS.retry"; done
-  fi
-done
-if [ -s "$JOBS.retry" ]; then
-  echo "Повторяю единичные провалы: $(wc -l < "$JOBS.retry") ..."
+# Пул заданий: не больше PARALLEL проверок одновременно. Пул — в отдельном
+# процессе: так wait -n не путает задания с nfqws.
+run_pool() { # файл заданий
   (
     trap 'kill $(jobs -p) 2>/dev/null; exit 143' TERM
-    while IFS=$'\t' read -r jn js jt jc; do run_job "$jn" "$js" "$jt" "$jc" & done < "$JOBS.retry"
+    running=0
+    while IFS=$'\t' read -r jn js jt jc; do
+      if [ "$running" -ge "$PARALLEL" ]; then
+        wait -n
+        running=$((running - 1))
+      fi
+      run_job "$jn" "$js" "$jt" "$jc" &
+      running=$((running + 1))
+    done < "$1"
     wait
   ) &
   POOL_PID=$!
   wait "$POOL_PID"
   POOL_PID=""
+}
+run_pool "$JOBS.mix"
+
+# Повтор: если цель у стратегии открылась хотя бы одной TCP-проверкой, а
+# другие провалились, провалы — скорее случайность сети, чем блокировка; они
+# выполняются ещё раз. Цели, где провалено всё, — блокировка, их не повторяем.
+# QUIC (h3) не повторяется и не считается: его часто режут отдельно от TCP.
+retry_jobs() { # -> строки заданий для повтора
+  local f s t c rc code
+  for f in "$TMP"/res/*; do
+    IFS=$'\t' read -r s t c rc code _ < "$f"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${f##*/}" "$s" "$t" "$c" "$rc" "${code%% *}"
+  done | awk -F'\t' '
+    $2 < 0 || $4 == "h3" || $5 == 45 { next }
+    { k = $2 SUBSEP $3
+      if ($5 == 0 && $6 ~ /^[0-9]+$/ && $6 != "000") ok[k] = 1
+      else { bad[k] = bad[k] " " $1 } }
+    END { for (k in bad) if (k in ok) { m = split(bad[k], a, " "); for (j = 1; j <= m; j++) print a[j] } }
+  ' | while read -r k; do awk -F'\t' -v k="$k" '$1 == k' "$JOBS"; done
+}
+retry_jobs > "$JOBS.retry"
+if [ -s "$JOBS.retry" ]; then
+  echo "Повторяю случайные провалы: $(wc -l < "$JOBS.retry") ..."
+  run_pool "$JOBS.retry"
 fi
 
 
@@ -488,9 +485,12 @@ SUMMARY="$TMP/summary.txt"
     echo "${C_WARN}Много ошибок сертификата или DNS ($nbad из $nall): похоже, провайдер подменяет DNS-ответы."
     echo "Настройте DNS поверх HTTPS или TLS (DoH/DoT) в системе — иначе стратегии не помогут.${C_OFF}"
   fi
+  # Игровые профили Flowseal ограничены списком IP: при IPSet none фильтр пуст.
   gf="$(cat "$ETC_DIR/gamefilter" 2>/dev/null || echo off)"
-  if [ "$gf" = off ]; then
-    echo "Игровой фильтр выключен: голос Discord (UDP) может не работать. Попробуйте: sudo zapret game udp (или all)"
+  ips="$(cat "$ETC_DIR/ipsetfilter" 2>/dev/null || echo none)"
+  if [ "$gf" != off ] && [ "$ips" = none ]; then
+    echo "Игровой фильтр включён ($gf), но при режиме IPSet none он не действует ни на один адрес."
+    echo "Он работает только вместе со списком IP: sudo zapret ipset loaded (или выключите: sudo zapret game off)."
   fi
 } > "$SUMMARY"
 

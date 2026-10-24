@@ -31,4 +31,49 @@ check "режим сохранён"             has "$ETC/gamefilter" "all"
 check "стратегия переприменена"    test "$GAMEFILTER_MODE" = all
 check_not "неизвестный режим — ошибка" gf turbo
 
+section "Предупреждение: игровой фильтр при IPSet none"
+W="не действует ни на один адрес"
+gfw() { # режим-ipset (- = нет файла) аргументы gamefilter.sh...; stderr в $TMP/w.err, stdout в $TMP/w.out
+  local ips="$1"; shift
+  rm -f "$ETC/ipsetfilter"; [ "$ips" = - ] || echo "$ips" > "$ETC/ipsetfilter"
+  gf "$@" >"$TMP/w.out" 2>"$TMP/w.err"
+}
+for m in tcp udp all; do
+  gfw none "$m"; rc=$?
+  check "$m + IPSet none: предупреждение в stderr"  has "$TMP/w.err" "$W"
+  check "$m + IPSet none: совет sudo zapret ipset loaded" has "$TMP/w.err" "sudo zapret ipset loaded"
+  check "$m + IPSet none: режим сохранён"           has "$ETC/gamefilter" "$m"
+  check "$m + IPSet none: код возврата 0, стратегия применена" test "$rc" -eq 0
+  check "$m + IPSet none: переприменение идёт"      has "$TMP/w.out" "переприменяю"
+  check_not "$m + IPSet none: предупреждение не в stdout" has "$TMP/w.out" "$W"
+done
+gfw - udp
+check "udp, файла ipsetfilter нет: предупреждение" has "$TMP/w.err" "$W"
+check "udp, файла ipsetfilter нет: режим сохранён" has "$ETC/gamefilter" "udp"
+gfw none off
+check_not "off + IPSet none: предупреждения нет"   has "$TMP/w.err" "$W"
+check "off: режим сохранён"                        has "$ETC/gamefilter" "off"
+for ips in loaded any; do
+  gfw "$ips" all
+  check_not "all + IPSet $ips: предупреждения нет" has "$TMP/w.err" "$W"
+done
+
+section "status при IPSet none"
+gfw none udp
+rm -f "$ETC/ipsetfilter"; echo none > "$ETC/ipsetfilter"
+gf status >"$TMP/s.out" 2>"$TMP/s.err"
+check "status, udp + IPSet none: предупреждение в stdout" has "$TMP/s.out" "$W"
+check "status: совет sudo zapret ipset loaded"     has "$TMP/s.out" "sudo zapret ipset loaded"
+echo loaded > "$ETC/ipsetfilter"
+gf status >"$TMP/s.out" 2>"$TMP/s.err"
+check_not "status, udp + IPSet loaded: предупреждения нет" has "$TMP/s.out" "$W"
+gfw none off
+echo none > "$ETC/ipsetfilter"
+gf status >"$TMP/s.out" 2>"$TMP/s.err"
+check_not "status, off + IPSet none: предупреждения нет" has "$TMP/s.out" "$W"
+rm -f "$ETC/ipsetfilter"
+gfw none all >/dev/null 2>&1; rm -f "$ETC/ipsetfilter"
+gf status >"$TMP/s.out" 2>"$TMP/s.err"
+check "status, файла ipsetfilter нет: предупреждение" has "$TMP/s.out" "$W"
+
 finish
